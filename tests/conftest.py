@@ -86,6 +86,29 @@ def public_payload(
     }
 
 
+def flat_payload(
+    items: Any,
+    *,
+    result_code: str = "00",
+    result_msg: str = "OK",
+    page_no: int = 1,
+    num_of_rows: int = 10,
+    total_count: int | None = None,
+) -> dict[str, Any]:
+    """청정넷(AICAN) 계열처럼 response.header/body로 감싸지 않는 flat envelope."""
+
+    if total_count is None:
+        total_count = len(items) if isinstance(items, list) else (1 if items else 0)
+    return {
+        "resultCode": result_code,
+        "resultMsg": result_msg,
+        "numOfRows": num_of_rows,
+        "pageNo": page_no,
+        "totalCount": total_count,
+        "items": items,
+    }
+
+
 def xml_payload(
     item_xml: str,
     *,

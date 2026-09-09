@@ -24,6 +24,7 @@ TripMate 여행지도 앱에서 산림청 공공데이터를 단순 POI 목록�
 | 산불 위험 | 산불위험예보, 산불 발생 통계 | `await client.safety.wildfire_risk_forecast()`, `await client.safety.wildfire_stats()` | 위험 등급 배지, 고위험 지역 안내, 과거 이력 참고 |
 | 산사태 위험 | 산사태위험지도, 산사태 예측·예보·이력 | `await client.safety.landslide_risk_map_files()`, `await client.safety.landslide_predictions()`, `await client.safety.landslide_forecast_issues()` | 산행·드라이브 경로 주변 위험도 경고 |
 | 대응 시설 | 사방댐, 산불소화시설, 진화대원 대기장소 등 | `await client.safety.erosion_control_dams()`, 파일데이터 카탈로그 | 내부 운영 지도, 관리자용 안전 레이어 |
+| 대기질 | 청정넷(AICAN) 산림 미세먼지 실측·관측소 | `await client.safety.dust_measurements()`, `await client.safety.dust_stations()` | 산행 전 PM10/PM2.5 상태 카드, 관측소 위치 표시 |
 
 ## TripMate 기능 제안
 

@@ -243,3 +243,183 @@ data.go.kr 파일 상세 페이지는 다운로드 URL을 HTML/JS로 동적 구�
 
 ### 후속
 - (open) 사용자 가시 변경 → `__version__`을 `0.2.0`으로 올리고 README/SKILL/문서 모두 새 필드명에 맞춰 갱신.
+
+---
+
+## ADR-009: 국립산림과학원 20-API 카탈로그 검토 — 청정넷(AICAN) 안전 데이터 2건 추가, 나머지 16건 제외
+
+- 상태: accepted
+- 날짜: 2026-09-09
+- 결정자: human + agent
+
+### 컨텍스트
+자매 프로젝트(`korea-cli`)의 API 커버리지 카탈로그가 `산림청 국립산림과학원` 산하
+20개 data.go.kr dataset을 모두 "외부 링크"(미구현)로 표시했다. 사용자가 이 20건을
+검토해 빠진 부분을 구현하라고 요청했으나, 대부분은 `SKILL.md`/`docs/forest-api.md`가
+이미 명시한 범위 제외 기준(생물 표본, 임업경제, 도서관/연구, 법령)에 정확히
+해당했다. 사용자에게 확인한 결과 "여행/안전에 맞는 것만 추가하고 나머지는 제외 사유를
+문서화"하는 방향으로 결정했다.
+
+### 결정
+20건 중 산악기상(`mountain_weather`, 기구현)과 산불위험예보(`wildfire_risk_forecast*`,
+기구현)를 제외한 나머지를 검토해, 청정넷(AICAN) 산림 미세먼지 실측 API 2건만 추가한다.
+
+- `forest_dust_measurements`(15078005, `AicanDustData/dustData`): 관측소별
+  PM10·PM2.5·PM1.0과 온도·습도·풍향·풍속 10분 단위 실측값. 외출/등산 전 대기질을
+  확인할 수 있어 safety로 분류한다.
+- `forest_dust_stations`(15078013, `AicanObsrrInfo/obsrrInfo`): 관측소 명칭,
+  좌표, 주소, 설치일, 장비 정보. 측정데이터의 `obsrr_tpcd`(`station_code`)를
+  해석하려면 필요한 동반 데이터라 함께 추가한다(`ForestDustMeasurement.station_code`
+  와 `ForestDustStation.station_code`가 join key다. `obsrr_group_cd`는 관측소
+  속성에만 있고 측정데이터에는 없다). 같은 API의 WMS/WFS 지도 조회 기능
+  (`obsrrInfoWms`, `obsrrInfoWFS`)은 이미지/GML 응답이라 구현하지 않는다.
+
+나머지 16건(생물표본·임업경제·도서관/연구 12건 + 청정넷 GIS 레이어 4건: 그린인프라·
+그레이인프라·사용자가치·유관기관변환자료)은 `docs/forest-api.md`의 `Exclusions`
+절에 사유와 함께 기록하고 구현하지 않는다. 청정넷 GIS 레이어 4건은 홍릉·고매·시화·
+양재·관악·제주 등 소수 연구 대상지에 한정된 정적 WMS/WFS 분류 레이어라 여행자에게
+실행 가능한 정보를 주지 않는다.
+
+### 근거
+- `SKILL.md` 1절이 이미 "생물 표본, 임업경제, 법령해석, 사업자 등록, 행정 통계 데이터는
+  의도적으로 범위에서 제외"를 명시하고 있어, 이번 검토는 새 원칙이 아니라 기존 원칙의
+  적용이다.
+- 각 API의 data.go.kr 상세 페이지 첨부 활용가이드(`.docx`)를 직접 다운로드해 실제
+  request/response 필드, 에러 코드, 신청 가능 트래픽(개발계정 1,000회/일)을
+  확인했다. 카탈로그 요약만으로는 실제 스펙(특히 `contentType` 대소문자 구분, flat
+  envelope)을 알 수 없었다.
+- 실제 서비스키로 `forest_dust_measurements`를 라이브 호출해 확인했다: 이 API 계열은
+  `response.header/body`로 감싸지 않고 `resultCode`/`items`를 JSON 최상위에 바로
+  반환하며, `contentType=json`(소문자)은 무시되고 XML로 응답한다(대문자 `JSON`만
+  유효). 이 두 가지는 기존 `_http._normalize_payload`와 `ApiEndpoint`가 다루지 못해
+  인프라를 확장해야 했다.
+
+### 결과(긍정)
+- `_http._normalize_payload`가 `response.header/body` 중첩 envelope와
+  `resultCode`가 최상위에 바로 오는 flat envelope를 모두 지원하게 됐다. 향후
+  다른 산림청 API가 같은 flat 패턴을 쓰더라도 재사용 가능하다.
+- `ApiEndpoint.response_type_value`(및 `CatalogEntry` 동일 필드)를 추가해,
+  응답 타입 파라미터 값이 소문자 `"json"`이 아닌 provider별 override(예:
+  `"JSON"`)를 catalog 선언만으로 표현할 수 있다.
+- 라이브 검증 과정에서 `parser.parse_datetime`이 구분자 없는 12자리
+  `yyyyMMddHHmm` 문자열을 `%Y%m%d%H%M%S`로 잘못 역추적해 분(minute) 값을
+  훼손하던 기존 버그(예: `"202511011530"` → `15:03`)를 발견해 함께 고쳤다. 이
+  버그는 `mountain_weather`/`wildfire_risk_forecast` 등 기존 12자리 타임스탬프
+  필드에도 영향을 미치고 있었다. 숫자 전용 문자열은 이제 `fromisoformat`을 거치지
+  않고 길이(8/10/12/14)로만 형식을 고정한다 — `fromisoformat`도 11/13/15자리처럼
+  애매한 길이의 숫자열에서 구분자를 잘못 추정해 같은 종류의 오류를 낼 수 있어,
+  숫자 전용 입력은 처음부터 그 경로를 타지 않게 했다.
+- 전문 리뷰어 2명의 독립적 적대적 리뷰에서 나온 교정: `model_number` 필드명이
+  pydantic 2.7–2.9의 `protected_namespaces=('model_',)` 기본값과 충돌해
+  import 시 `UserWarning`을 낼 수 있어(이 프로젝트는 `pydantic>=2.7`을 허용) 필드를
+  삭제 전 `equipment_reference_number`로 변경했다. `obsrr_tpcd`는 관측소별
+  분류가 아니라 사실상 고유 식별 코드(측정데이터·관측소 속성 간 join key)로
+  기능해 `station_type_code`가 아닌 `station_code`로 이름을 바꿨다. `obsrr_instl_dt`
+  는 vendor가 날짜(yyyyMMdd)까지만 제공해 `installed_at`을 datetime이 아닌
+  원본 문자열로 노출한다(datetime으로 만들면 timezone 변환 시 날짜가 밀릴 수
+  있다). `address`는 `parser.py`의 다른 함수들과 일관되게 `_convert.extract_address`
+  로 추출하도록 바꿨다.
+
+### 결과(부정)
+- catalog와 문서에 "구현하지 않는 이유"를 명시적으로 남겨야 해서 `forest-api.md`가
+  길어졌다. 다만 향후 같은 조사를 반복하지 않게 해준다.
+- `response_type_value` 필드 추가로 `ApiEndpoint`/`CatalogEntry`의 필드 수가
+  늘었다(ADR-004의 "얇은 래퍼 금지" 정신과는 별개로, 이는 provider 스펙 차이를
+  흡수하는 필수 필드라 판단했다).
+
+### 후속
+- (open) 청정넷 GIS 레이어(WMS/WFS)나 나머지 16건 중 하나라도 향후 travel/safety
+  use case가 생기면 이 ADR과 `forest-api.md` Exclusions 표를 갱신한 뒤 재검토한다.
+
+---
+
+## ADR-010: `mountain_weather`는 좌표·고도를 정적 참조 테이블에서 채운다
+
+- 상태: accepted
+- 날짜: 2026-09-10
+- 결정자: human + agent
+
+### 컨텍스트
+"산악 날씨 api도 손봐"라는 요청에 따라 `client.travel.mountain_weather()`를
+ADR-009와 같은 방식(data.go.kr 상세 페이지 첨부 `.docx` 기술문서를 직접
+다운로드해 실제 스펙 확인 + 라이브 호출 검증)으로 재검토했다.
+
+기존 구현은 `parse_mountain_weather`가 `_convert.extract_coordinate(row)`로
+매 row에서 `xValue`/`yValue` 등의 좌표 필드를 찾도록 되어 있었고, 기존
+단위 테스트(`test_mountain_weather_returns_place_coordinate`)도 그런 필드가
+있다고 가정한 합성(fabricated) payload로 통과했다. 그러나 실제 서비스키로
+`mountListSearch`를 라이브 호출한 결과와, 첨부 기술문서
+(`03_산악기상정보_기술문서_v1.5(수정본).docx`)의 응답 필드 표를 대조한 결과,
+**이 API는 좌표·고도·지역명 필드를 단 하나도 반환하지 않는다**는 것을 확인했다.
+즉 이전까지 `client.travel.mountain_weather()`가 실제 서비스키로 호출될 때는
+`latitude`/`longitude`가 항상 `None`이었다 — 테스트만 통과하고 있었을 뿐, 실제로
+동작하지 않던 기능이다.
+
+같은 기술문서 부록("지점 상세 코드")에 454개 관측지점 전체의 지역명·산이름·
+지점번호·위도·경도·고도가 정적 표로 실려 있었다. 이 표가 좌표를 얻을 수 있는
+유일한 출처다.
+
+라이브 검증 중 추가로 확인한 것:
+- 응답의 모든 동적 필드(기온·습도·풍향·풍속·강수량·관측시간)는 결측을 문자열
+  `"-"`로 표현한다. 검증 시점 기준 513개 관측소 전부가 모든 필드에서 `"-"`를
+  반환했다(관측소 개별 장애가 아니라 전역적인 상태로 보인다 — 이 라이브러리가
+  고칠 수 있는 문제는 아니다). 숫자 필드는 `to_float_or_none`이 `float("-")`의
+  `ValueError`를 잡아 이미 우연히 `None`이 되고 있었지만, 문자열 필드
+  (`wd10mstr`/`wd2mstr`, 풍향 방위 문자)는 그대로 `"-"`가 남아 있었다.
+- `localArea`(지역코드), `obsid`(지점번호), `tm`(정확한 관측시간)이 문서에
+  명시된 선택 파라미터였는데도 `catalog.py`의 `optional_params`가 비어 있었고
+  `client.travel.mountain_weather()`에도 named kwarg가 없었다(`**params`로
+  전달은 가능했지만 카탈로그/시그니처 어디에도 드러나지 않았다).
+- 신청 가능 트래픽은 개발계정 10,000회/일로, 청정넷(AICAN) 계열의 1,000회/일과
+  다르다(엔드포인트마다 다르므로 매번 확인해야 한다).
+
+### 결정
+1. 첨부 기술문서의 "지점 상세 코드" 표를 그대로 옮긴 정적 참조 모듈
+   `src/krforest/_mountain_stations.py`(`MOUNTAIN_STATIONS: dict[str, MountainStationRef]`,
+   454개 지점번호 키)를 추가한다. 문서 텍스트에서 수기 필사 대신 스크립트로
+   테이블을 파싱·생성해 오타를 방지했다.
+2. `parse_mountain_weather`가 `obs_id`로 이 표를 조회해 `latitude`/`longitude`/
+   `elevation`/`region_name`(신규 모델 필드)을 채운다. 응답 row에 좌표 필드가
+   실제로 있으면(향후 provider 변경 등) 정적 표보다 그 값을 우선한다. 표에 없는
+   `obs_id`는 조용히 `None`으로 남긴다(예외를 던지지 않는다).
+3. 결측 문자열 `"-"`를 명시적으로 걸러내는 `_none_if_dash` 헬퍼를 추가해
+   `wind_direction_10m_name`/`wind_direction_2m_name`에 적용한다.
+4. `catalog.py`의 `mountain_weather` `optional_params`에 `localArea`/`obsid`/
+   `tm`을 채우고, `client.travel.mountain_weather()`에 `local_area`/`obs_id`/
+   `observed_at` named kwarg를 추가해 다른 endpoint(`wildfire_stats` 등)와
+   시그니처 관례를 맞춘다.
+
+### 근거
+- 실제로 동작하지 않는 기능(항상 `None`인 좌표)을 "동작한다"고 문서·테스트가
+  주장하는 상태를 그대로 둘 수 없었다.
+- 정적 표는 벤더가 새 관측소를 등록할 때만 바뀌는 저빈도 참조 데이터라, 매
+  호출마다 별도 API를 부르는 대신 라이브러리에 내장하는 것이 ADR-004(얇은 래퍼
+  금지, 검증된 패턴 재사용)와 어긋나지 않는다 — 오히려 provider가 제공하지
+  않는 정보를 provider의 공식 문서에서 그대로 가져온 것이다.
+- `"-"` 결측 처리는 숫자 필드에서 이미 우연히 맞았던 동작을 문자열 필드에도
+  동일하게 명시적으로 적용해 일관성을 맞춘 것뿐이며, 새로운 정책을 도입한 것은
+  아니다.
+
+### 결과(긍정)
+- `client.travel.mountain_weather()`가 실제 서비스키로도 `latitude`/
+  `longitude`/`elevation`/`region_name`을 채운 레코드를 반환한다(라이브
+  검증: obs_id=1890 → 위도 37.78/경도 126.92/고도 242.0/서울특별시 인접
+  경기도, 문서 표 값과 일치).
+- 알려지지 않은 `obs_id`에 대해서도 예외 없이 `None`으로 안전하게 동작한다.
+- `local_area`/`obs_id`/`observed_at` 필터가 카탈로그와 client signature에
+  모두 드러나 디버그 UI·자동완성에서 발견 가능해졌다.
+
+### 결과(부정)
+- `_mountain_stations.py`가 454줄짜리 정적 데이터 파일이라 저장소에 큰 상수
+  블록이 추가된다. 벤더가 관측소를 추가·폐지하면 수동으로 갱신해야 한다(자동
+  동기화 메커니즘은 없다).
+- 정적 표와 라이브 API의 `obsid`가 어긋나는 경우(신규 관측소가 아직 표에 없는
+  경우 등) 좌표 없이 `None`으로만 남으므로, 완전한 좌표 커버리지를 보장하지는
+  않는다.
+
+### 후속
+- (open) 벤더가 기술문서를 갱신하면(새 관측소 추가 등) `_mountain_stations.py`도
+  다시 생성해 동기화해야 한다.
+- (open) 라이브 API가 모든 관측소에 대해 지속적으로 `"-"`만 반환하는 이유(승인
+  단계 제한인지, 실제 관측 공백인지)는 확인되지 않았다. 운영계정 승인 후
+  재확인이 필요하다.

@@ -2,6 +2,71 @@
 
 현재 `python-krforest-api` 프로젝트의 진척도와 이어서 할 작업을 기록합니다. 새 세션이나 작업 재개 시 이 문서를 가장 먼저 확인하세요.
 
+## 현재 진척도 (2026-09-10)
+
+- `client.travel.mountain_weather()`의 실사용 결함을 고쳤다: 실제
+  `mountListSearch` 응답에는 좌표·고도·지역명 필드가 전혀 없어(벤더 기술문서 +
+  라이브 호출로 확인) 좌표가 항상 `None`이었다. 기술문서 부록의 관측지점 표
+  454개를 `src/krforest/_mountain_stations.py`로 옮기고, `obs_id` 기준으로
+  조회해 `latitude`/`longitude`/`elevation`/`region_name`을 채운다. ADR-010.
+- 결측 sentinel 문자열 `"-"`가 문자열 필드(`wind_direction_10m_name`/
+  `wind_direction_2m_name`)에는 그대로 남아 있던 것을 `_none_if_dash`로 고쳤다
+  (숫자 필드는 이미 `ValueError` 부작용으로 우연히 `None`이었다).
+- `localArea`/`obsid`/`tm`을 `catalog.py` `optional_params`에 채우고
+  `client.travel.mountain_weather(local_area=, obs_id=, observed_at=)` named
+  kwarg를 추가했다. 개발계정 트래픽 한도(10,000회/일, 청정넷과 다름)도 확인해
+  기록했다.
+- 라이브 검증: obs_id=1890(파주 팔일봉) → 위도 37.78/경도 126.92/고도 242.0로
+  정확히 채워짐 확인. 다만 검증 시점 기준 513개 관측소 전부가 모든 동적
+  필드(기온/습도/풍향/풍속/강수량/관측시간)에서 `"-"`(결측)를 반환했다 — 이
+  라이브러리가 고칠 수 있는 문제가 아니며, 승인 단계 제한인지 실제 관측 공백인지
+  는 확인되지 않았다(ADR-010 후속 참조).
+- `pytest -q` 58 passed / live 11 passed·2 xfailed, `ruff`, `mypy --strict` 통과.
+
+## 다음 해야 할 작업 (Next Task)
+
+- [ ] 운영계정 승인 또는 다른 시점에 `mountain_weather` 라이브 데이터를 재확인해
+  `"-"` 전역 결측이 승인 단계 문제인지 실제 공백인지 판별.
+- [ ] `_mountain_stations.py`는 벤더 기술문서 스냅샷이라 자동 동기화 메커니즘이
+  없다 — 벤더가 관측소를 추가/폐지하면 수동 재생성 필요.
+
+## 현재 진척도 (2026-09-09)
+
+- `산림청 국립산림과학원` 20-API 카탈로그를 검토해 `forest_dust_measurements`
+  (15078005)와 `forest_dust_stations`(15078013, 청정넷/AICAN 산림 미세먼지)를
+  safety endpoint로 추가했다. 나머지 16건은 기존 범위 제외 기준에 따라
+  `docs/forest-api.md` Exclusions와 ADR-009에 사유를 기록하고 구현하지 않았다.
+- 이 과정에서 `_http._normalize_payload`가 `resultCode`/`items`를 최상위에 바로
+  반환하는 flat envelope(response.header/body로 감싸지 않는 형태)도 지원하도록
+  확장했고, `ApiEndpoint.response_type_value`를 추가해 `contentType=JSON`처럼
+  provider별 대소문자/값이 다른 응답 타입 파라미터를 catalog 선언만으로 표현할 수
+  있게 했다.
+- 라이브 검증 중 `parser.parse_datetime`이 구분자 없는 12자리 `yyyyMMddHHmm`
+  문자열의 분(minute) 값을 `strptime("%Y%m%d%H%M%S")` 자릿수 역추적으로 훼손하던
+  기존 버그를 발견·수정했다. `mountain_weather`/`wildfire_risk_forecast` 등 기존
+  12자리 타임스탬프 필드에도 영향을 미치던 버그였다.
+- 실제 서비스키로 `client.safety.dust_measurements()` 라이브 호출을 확인했다
+  (활용신청 승인 상태, 총 30,286,187건). `dust_stations()`는 아직 활용신청
+  미승인이라 auth xfail(기존 다른 `1400377`/`1400000` endpoint와 동일 패턴).
+- `pytest -q` 49 passed / live 11 passed·2 xfailed(환경변수 설정 시), `ruff`와
+  `mypy --strict src/krforest` 통과.
+
+## 다음 해야 할 작업 (Next Task)
+
+- [x] 전문 리뷰어 2명의 독립적 적대적 리뷰(정확성 관점 + API 설계/컨벤션 관점)를
+  반영: pydantic `model_` 네임스페이스 충돌 회피(`equipment_reference_number`),
+  join key 이름 정정(`station_type_code`→`station_code`), 날짜 전용 필드를
+  `datetime`이 아닌 문자열로 노출(`installed_at`), `_convert.extract_address`
+  사용 일관화, `parse_datetime`이 `fromisoformat`도 우회하도록 강화(11/13/15자리
+  숫자열 오파싱 방지), flat envelope 성공/실패 경로와 기존 12자리 타임스탬프
+  회귀 테스트 보강, 라이브 키 검증 테스트의 `serviceKey`→`ServiceKey` 대소문자
+  오류 수정, ADR-009/`forest-api.md`의 수치 불일치(나머지 16건/12건, 4 dataset vs
+  6 endpoint) 정정. PR CI·머지는 아직 남음.
+- [ ] (백로그) 청정넷 GIS 레이어(WMS/WFS, 그린/그레이인프라·사용자가치·유관기관
+  변환자료 4건)나 나머지 12개 비-GIS 국립산림과학원 API(생물표본·임업경제·
+  도서관/연구) 중 travel/safety use case가 생기면 ADR-009와
+  `docs/forest-api.md` Exclusions를 갱신한 뒤 재검토.
+
 ## 현재 진척도 (2026-08-20)
 
 - `T-VN-C05A`의 forest.go.kr `PBD0000041` 통합 ZIP을 구현 계약에 맞게 보강함.

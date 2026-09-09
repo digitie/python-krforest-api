@@ -7,8 +7,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from ._convert import extract_address, extract_coordinate, to_float_or_none
+from ._mountain_stations import MOUNTAIN_STATIONS
 from .models import (
     ErosionControlDam,
+    ForestDustMeasurement,
+    ForestDustStation,
     LandslideForecastIssue,
     MountainWeather,
     RecreationForestReservation,
@@ -43,14 +46,27 @@ _STATUS_KEYS = ("status", "상태", "예약상태")
 
 
 def parse_mountain_weather(row: dict[str, Any]) -> MountainWeather:
-    """산악기상 원본 레코드를 typed 관측 모델로 파싱한다."""
+    """산악기상 원본 레코드를 typed 관측 모델로 파싱한다.
 
-    latitude, longitude = extract_coordinate(row)
+    ``mountListSearch`` 응답 자체는 좌표·고도·지역명을 담지 않으므로,
+    ``obs_id``로 :data:`krforest._mountain_stations.MOUNTAIN_STATIONS` 정적
+    참조 테이블을 조회해 채운다. 응답에 좌표 필드가 실제로 포함된 경우(향후
+    provider 변경 등)에는 그 값을 우선한다.
+    """
+
     key_map = _lower_key_map(row)
+    obs_id = first_text(row, "obsid", "obsId", "obs_id", "관측소ID", key_map=key_map)
+    station = MOUNTAIN_STATIONS.get(obs_id) if obs_id else None
+    latitude, longitude = extract_coordinate(row)
+    if latitude is None and longitude is None and station is not None:
+        latitude, longitude = station.latitude, station.longitude
+    obs_name = first_text(row, "obsname", "obsName", "obs_name", "관측소명", key_map=key_map)
     return MountainWeather(
-        obs_id=first_text(row, "obsid", "obsId", "obs_id", "관측소ID", key_map=key_map),
-        obs_name=first_text(row, "obsname", "obsName", "obs_name", "관측소명", key_map=key_map),
+        obs_id=obs_id,
+        obs_name=obs_name or (station.mountain_name if station else None),
         local_area=first_text(row, "localarea", "localArea", "local_area", "지역", key_map=key_map),
+        region_name=station.region_name if station else None,
+        elevation=station.elevation if station else None,
         observed_at=parse_datetime(
             first_text(row, "tm", "observedAt", "관측시간", key_map=key_map)
         ),
@@ -71,12 +87,12 @@ def parse_mountain_weather(row: dict[str, Any]) -> MountainWeather:
         wind_direction_10m=_first_float(
             row, "wd10m", "windDirection10m", "풍향10m", key_map=key_map
         ),
-        wind_direction_10m_name=first_text(
-            row, "wd10mstr", "windDirection10mName", "풍향10m문자", key_map=key_map
+        wind_direction_10m_name=_none_if_dash(
+            first_text(row, "wd10mstr", "windDirection10mName", "풍향10m문자", key_map=key_map)
         ),
         wind_direction_2m=_first_float(row, "wd2m", "windDirection2m", "풍향2m", key_map=key_map),
-        wind_direction_2m_name=first_text(
-            row, "wd2mstr", "windDirection2mName", "풍향2m문자", key_map=key_map
+        wind_direction_2m_name=_none_if_dash(
+            first_text(row, "wd2mstr", "windDirection2mName", "풍향2m문자", key_map=key_map)
         ),
         wind_speed_10m=_first_float(row, "ws10m", "windSpeed10m", "풍속10m", key_map=key_map),
         wind_speed_2m=_first_float(row, "ws2m", "windSpeed2m", "풍속2m", key_map=key_map),
@@ -143,6 +159,55 @@ def parse_wildfire_risk_forecast(
         standard_deviation=_first_float(
             row, "std", "standardDeviation", "표준편차", key_map=key_map
         ),
+        raw=row,
+    )
+
+
+def parse_forest_dust_measurement(row: dict[str, Any]) -> ForestDustMeasurement:
+    """청정넷(AICAN) 측정데이터 row를 typed 모델로 파싱한다."""
+
+    key_map = _lower_key_map(row)
+    return ForestDustMeasurement(
+        station_code=first_text(row, "obsrr_tpcd", key_map=key_map),
+        observed_at=parse_datetime(first_text(row, "obsrt_dtm", key_map=key_map)),
+        temperature=_first_float(row, "obsrt_tmprt", key_map=key_map),
+        humidity=_first_float(row, "obsrt_hmdt", key_map=key_map),
+        wind_direction=_first_float(row, "obsrt_wndrc_val", key_map=key_map),
+        wind_speed=_first_float(row, "obsrt_ws", key_map=key_map),
+        pm10=_first_float(row, "obsrt_pm10_val", key_map=key_map),
+        pm25=_first_float(row, "obsrt_pm25_val", key_map=key_map),
+        pm01=_first_float(row, "obsrt_pm01_val", key_map=key_map),
+        avoc_pm10=_first_float(row, "avoc_obsrt_pm10_val", key_map=key_map),
+        avoc_pm25=_first_float(row, "avoc_obsrt_pm25_val", key_map=key_map),
+        avoc_pm01=_first_float(row, "avoc_obsrt_pm01_val", key_map=key_map),
+        raw=row,
+    )
+
+
+def parse_forest_dust_station(row: dict[str, Any]) -> ForestDustStation:
+    """청정넷(AICAN) 운영현황(관측소 속성) row를 typed 모델로 파싱한다."""
+
+    latitude, longitude = extract_coordinate(
+        row,
+        extra_latitude_keys=("obsrr_lttd",),
+        extra_longitude_keys=("obsrr_lngtd",),
+    )
+    address = extract_address(row, extra_keys=("obsrr_addr",))
+    key_map = _lower_key_map(row)
+    return ForestDustStation(
+        station_name=first_text(row, "obsrr_nm", key_map=key_map),
+        station_code=first_text(row, "obsrr_tpcd", key_map=key_map),
+        station_group_code=first_text(row, "obsrr_group_cd", key_map=key_map),
+        description=first_text(row, "obsrr_dscrt", key_map=key_map),
+        address=address,
+        installed_at=first_text(row, "obsrr_instl_dt", key_map=key_map),
+        equipment_name=first_text(row, "eqpmn_nm", key_map=key_map),
+        equipment_model=first_text(row, "eqpmn_model_nm", key_map=key_map),
+        equipment_maker=first_text(row, "eqpmn_mkr_nm", key_map=key_map),
+        equipment_reference_number=first_text(row, "obsrr_mdm_no", key_map=key_map),
+        elevation=_first_float(row, "obsrr_haslv", key_map=key_map),
+        latitude=latitude,
+        longitude=longitude,
         raw=row,
     )
 
@@ -252,6 +317,17 @@ def _strip_or_none(value: Any) -> str | None:
     return text or None
 
 
+def _none_if_dash(value: str | None) -> str | None:
+    """산악기상(mtweather) 등 일부 provider는 결측값을 문자열 "-"로 반환한다.
+
+    숫자 필드는 ``to_float_or_none``의 ``ValueError`` 처리로 이미 ``None``이
+    되지만, 문자열 필드(예: 풍향 방위 문자)는 그대로 "-"가 남으므로 명시적으로
+    걸러낸다.
+    """
+
+    return None if value == "-" else value
+
+
 def _first_float(
     row: Mapping[str, Any], *keys: str, key_map: Mapping[str, str] | None = None
 ) -> float | None:
@@ -270,14 +346,32 @@ def parse_datetime(value: Any) -> datetime | None:
     normalized = text.replace("/", "-").replace("T", " ")
     if normalized.endswith("Z"):
         normalized = f"{normalized[:-1]}+00:00"
+
+    if normalized.isdigit():
+        # 구분자 없는 숫자열(예: yyyyMMddHHmm)은 길이로 형식을 고정해서만 파싱한다.
+        # datetime.fromisoformat()도 strptime의 %H%M%S 등도 자릿수를 넘나들며
+        # 잘못 역추적할 수 있어(예: "202511011530"을 15:03으로 오인), 둘 다 거치지
+        # 않고 이 분기에서 바로 처리해야 한다.
+        digit_format = {
+            14: "%Y%m%d%H%M%S",
+            12: "%Y%m%d%H%M",
+            10: "%Y%m%d%H",
+            8: "%Y%m%d",
+        }.get(len(normalized))
+        if digit_format is None:
+            return None
+        try:
+            digit_parsed = datetime.strptime(normalized, digit_format)
+        except ValueError:
+            return None
+        return digit_parsed.replace(tzinfo=KST)
+
+    parsed: datetime | None
     try:
         parsed = datetime.fromisoformat(normalized)
     except ValueError:
         parsed = None
         for fmt in (
-            "%Y%m%d%H%M%S",
-            "%Y%m%d%H%M",
-            "%Y%m%d%H",
             "%Y-%m-%d %H:%M:%S",
             "%Y-%m-%d %H:%M",
             "%Y-%m-%d",

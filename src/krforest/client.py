@@ -38,6 +38,8 @@ from .models import (
     CatalogEntry,
     ErosionControlDam,
     FileDataset,
+    ForestDustMeasurement,
+    ForestDustStation,
     ForestSpatialFeature,
     ForestSpatialPoint,
     LandslideForecastIssue,
@@ -51,6 +53,8 @@ from .models import (
 )
 from .parser import (
     parse_erosion_control_dam,
+    parse_forest_dust_measurement,
+    parse_forest_dust_station,
     parse_landslide_forecast_issue,
     parse_mountain_weather,
     parse_recreation_forest_reservation,
@@ -299,6 +303,7 @@ class ForestClient:
             response_format=fmt,
             service_key_param=endpoint.service_key_param,
             response_type_param=endpoint.response_type_param,
+            response_type_value=endpoint.response_type_value,
         )
         parsed: list[T] = []
         for row in payload.items:
@@ -414,15 +419,26 @@ class TravelNamespace:
     async def mountain_weather(
         self,
         *,
+        local_area: str | None = None,
+        obs_id: str | None = None,
+        observed_at: str | None = None,
         page_no: int = 1,
         num_of_rows: int = 10,
         **params: Any,
     ) -> Page[MountainWeather]:
-        """국립산림과학원 산악기상 레코드를 조회한다."""
+        """국립산림과학원 산악기상 레코드를 조회한다.
 
+        `local_area`는 지역코드(01=서울특별시 ... 17=제주도), `obs_id`는
+        지점번호, `observed_at`은 정확한 관측시간(yyyyMMddHHmm)으로 필터링한다.
+        """
+
+        query = dict(params)
+        query["localArea"] = local_area
+        query["obsid"] = obs_id
+        query["tm"] = observed_at
         return await self._client._page(
             api_endpoint("mountain_weather"),
-            _page_params(params, page_no=page_no, num_of_rows=num_of_rows),
+            _page_params(query, page_no=page_no, num_of_rows=num_of_rows),
             MountainWeather,
             parse_mountain_weather,
         )
@@ -745,6 +761,43 @@ class SafetyNamespace:
         """산사태위험지도 ZIP을 파일명 기준 bytes dict로 반환한다."""
 
         return await self._client.files.archive_files("PBD0000210")
+
+    async def dust_measurements(
+        self,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        page_no: int = 1,
+        num_of_rows: int = 10,
+        **params: Any,
+    ) -> Page[ForestDustMeasurement]:
+        """청정넷(AICAN) 관측소별 미세먼지·기상 측정 레코드를 조회한다."""
+
+        query = dict(params)
+        query["startDt"] = start_date
+        query["endDt"] = end_date
+        return await self._client._page(
+            api_endpoint("forest_dust_measurements"),
+            _page_params(query, page_no=page_no, num_of_rows=num_of_rows),
+            ForestDustMeasurement,
+            parse_forest_dust_measurement,
+        )
+
+    async def dust_stations(
+        self,
+        *,
+        page_no: int = 1,
+        num_of_rows: int = 10,
+        **params: Any,
+    ) -> Page[ForestDustStation]:
+        """청정넷(AICAN) 미세먼지 관측소 속성(명칭, 좌표, 장비) 레코드를 조회한다."""
+
+        return await self._client._page(
+            api_endpoint("forest_dust_stations"),
+            _page_params(params, page_no=page_no, num_of_rows=num_of_rows),
+            ForestDustStation,
+            parse_forest_dust_station,
+        )
 
 
 @dataclass(frozen=True, slots=True)

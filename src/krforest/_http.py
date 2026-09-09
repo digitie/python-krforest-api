@@ -113,11 +113,14 @@ class ForestHttp:
         response_format: str = "xml",
         service_key_param: str | None = None,
         response_type_param: str | None = None,
+        response_type_value: str | None = None,
     ) -> NormalizedPayload:
         key_param = service_key_param or self.service_key_param
         query: dict[str, Any] = {key_param: self.api_key}
         if provider == "data.go.kr" and response_format.lower() == "json":
-            query[response_type_param or "_type"] = "json"
+            # response_type_value는 JSON을 요청할 때만 쓰인다(예: 청정넷은 소문자
+            # "json"이 아니라 대문자 "JSON"만 인식). XML 응답 형식에는 적용되지 않는다.
+            query[response_type_param or "_type"] = response_type_value or "json"
         if params:
             query.update(params)
 
@@ -272,18 +275,32 @@ def _normalize_payload(
             api_key=api_key,
         )
 
-    try:
-        response = payload["response"]
-        header = response.get("header", {})
-        body = response.get("body", {})
-    except (KeyError, AttributeError) as exc:
+    if "response" in payload:
+        try:
+            response = payload["response"]
+            header = response.get("header", {})
+            body = response.get("body", {})
+        except AttributeError as exc:
+            raise ForestParseError(
+                "response did not contain response.header/body",
+                provider=provider,
+                endpoint=endpoint,
+                response=payload,
+                failure_kind="parse",
+            ) from exc
+    elif "resultCode" in payload:
+        # 청정넷(AICAN) 계열 등 일부 provider는 response.header/body로 감싸지 않고
+        # resultCode/resultMsg/items를 최상위에 바로 반환한다.
+        header = {"resultCode": payload.get("resultCode"), "resultMsg": payload.get("resultMsg")}
+        body = payload
+    else:
         raise ForestParseError(
             "response did not contain response.header/body",
             provider=provider,
             endpoint=endpoint,
             response=payload,
             failure_kind="parse",
-        ) from exc
+        )
 
     if not isinstance(header, dict) or not isinstance(body, dict):
         raise ForestParseError(

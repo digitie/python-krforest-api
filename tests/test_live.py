@@ -82,6 +82,10 @@ async def test_live_mountain_weather_is_either_authorized_or_clean_auth_error():
         assert "ServiceKey" not in page.context.request_params
         assert key not in repr(page.context.request_params)
         assert page.total_count >= len(page.items)
+        assert page.items
+        # mountListSearch 응답 자체에는 좌표가 없다 — 정적 참조 테이블(obsid 기준)로
+        # 채운 값이 실제 지점번호에 대해 채워지는지 라이브로 확인한다.
+        assert all(item.latitude is not None for item in page.items if item.obs_id)
 
 
 async def test_live_wildfire_risk_v2_is_either_authorized_or_clean_auth_error():
@@ -179,6 +183,46 @@ async def test_live_mountain_trail_features_are_line_features_with_source_ids():
     )
     assert all(feature.source_id for feature in features)
     assert all(feature.geometry for feature in features)
+
+
+async def test_live_dust_measurements_is_either_authorized_or_clean_auth_error():
+    key = _service_key()
+    client = ForestClient(api_key=key, timeout=LIVE_TIMEOUT)
+
+    try:
+        page = await client.safety.dust_measurements(num_of_rows=1)
+    except ForestAuthError as exc:
+        assert exc.provider == "data.go.kr"
+        assert exc.failure_kind == "auth"
+        assert key not in str(exc)
+        pytest.xfail("data.go.kr 15078005 청정넷 측정데이터 API is not approved")
+    else:
+        assert page.context.provider == "data.go.kr"
+        assert page.context.endpoint == "dustData"
+        assert "ServiceKey" not in page.context.request_params
+        assert key not in repr(page.context.request_params)
+        assert page.total_count >= len(page.items)
+        assert page.items
+        assert page.items[0].observed_at is not None
+
+
+async def test_live_dust_stations_is_either_authorized_or_clean_auth_error():
+    key = _service_key()
+    client = ForestClient(api_key=key, timeout=LIVE_TIMEOUT)
+
+    try:
+        page = await client.safety.dust_stations(num_of_rows=1)
+    except ForestAuthError as exc:
+        assert exc.provider == "data.go.kr"
+        assert exc.failure_kind == "auth"
+        assert key not in str(exc)
+        pytest.xfail("data.go.kr 15078013 청정넷 운영현황 API is not approved")
+    else:
+        assert page.context.provider == "data.go.kr"
+        assert page.context.endpoint == "obsrrInfo"
+        assert "ServiceKey" not in page.context.request_params
+        assert key not in repr(page.context.request_params)
+        assert page.total_count >= len(page.items)
 
 
 async def test_live_landslide_risk_map_archive_downloads_files():

@@ -23,6 +23,8 @@ def test_catalog_has_travel_and_safety_api_endpoints():
     assert "wildfire_risk_forecast_sido" in keys
     assert "wildfire_risk_forecast_sigungu" in keys
     assert "landslide_predictions" in keys
+    assert "forest_dust_measurements" in keys
+    assert "forest_dust_stations" in keys
     assert {endpoint.provider for endpoint in API_ENDPOINTS} == {"forest.go.kr", "data.go.kr"}
 
 
@@ -49,9 +51,18 @@ def test_catalog_lookup_and_invalid_category():
     mountain_weather = api_endpoint("mountain_weather")
     assert mountain_weather.response_format == "json"
     assert mountain_weather.response_type_param == "_type"
+    assert mountain_weather.optional_params == ("localArea", "obsid", "tm")
     assert api_endpoint("wildfire_risk_forecast").operation == (
         "forestPointListGeongugSearchV2"
     )
+    dust_measurements = api_endpoint("forest_dust_measurements")
+    assert dust_measurements.data_go_id == "15078005"
+    assert dust_measurements.response_type_param == "contentType"
+    assert dust_measurements.response_type_value == "JSON"
+    assert dust_measurements.categories == ("safety",)
+    dust_stations = api_endpoint("forest_dust_stations")
+    assert dust_stations.data_go_id == "15078013"
+    assert dust_stations.operation == "obsrrInfo"
     assert file_dataset("15112801").formats == ("CSV",)
     assert file_dataset("PBD0000041").provider == "forest.go.kr"
     assert file_dataset("PBD0000031").download_path == "/trail/dule.zip"
@@ -80,6 +91,9 @@ def test_human_readable_catalog_entries():
     assert standard.dataset_name == "전국휴양림표준데이터"
     assert standard.service_key_url == "https://www.data.go.kr/data/15013111/standard.do"
     assert standard.response_type_param == "type"
+    dust_measurements_entry = catalog_entry("forest_dust_measurements")
+    assert dust_measurements_entry.response_type_param == "contentType"
+    assert dust_measurements_entry.response_type_value == "JSON"
     assert reservation_by_id == reservation
     assert reservation_file.kind == "file_dataset"
     assert reservation_file.service_key_url is None

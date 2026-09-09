@@ -76,6 +76,7 @@ class ApiEndpoint(ForestModel):
     service_key_param: str = "ServiceKey"
     response_format: str | None = None
     response_type_param: str | None = None
+    response_type_value: str | None = None
     required_params: tuple[str, ...] = ()
     optional_params: tuple[str, ...] = ()
 
@@ -118,6 +119,7 @@ class CatalogEntry(ForestModel):
     service_key_param: str | None = None
     response_format: str | None = None
     response_type_param: str | None = None
+    response_type_value: str | None = None
     required_params: tuple[str, ...] = ()
     optional_params: tuple[str, ...] = ()
     notes: str | None = None
@@ -128,11 +130,18 @@ class MountainWeather(ForestModel):
 
     원천 필드명(``hm10m``/``rn`` 등)은 ``raw``에 그대로 보존하고, map ETL이
     사용할 의미 있는 이름과 단위를 함께 제공한다.
+
+    ``mountListSearch`` 응답 자체에는 좌표·고도·지역명 필드가 없다.
+    ``latitude``/``longitude``/``elevation``/``region_name``은
+    ``_mountain_stations.MOUNTAIN_STATIONS`` 정적 참조 테이블에서
+    ``obs_id``로 조회해 채운 값이며, 해당 지점번호가 표에 없으면 ``None``이다.
     """
 
     obs_id: str | None = None
     obs_name: str | None = None
     local_area: str | None = None
+    region_name: str | None = None
+    elevation: float | None = None
     observed_at: datetime | None = None
     temperature_10m: float | None = None
     temperature_2m: float | None = None
@@ -170,6 +179,53 @@ class WildfireRiskForecast(ForestModel):
     mean_average: float | None = None
     minimum: float | None = None
     standard_deviation: float | None = None
+    raw: RawRecord = Field(repr=False)
+
+
+class ForestDustMeasurement(ForestModel):
+    """청정넷(AICAN) 산림 미세먼지 관측소의 10분 단위 측정 레코드.
+
+    ``station_code``(``obsrr_tpcd``)는 관측소별 고유 식별 코드로,
+    ``ForestDustStation.station_code``와 join key로 쓸 수 있다.
+    """
+
+    station_code: str | None = None
+    observed_at: datetime | None = None
+    temperature: float | None = None
+    humidity: float | None = None
+    wind_direction: float | None = None
+    wind_speed: float | None = None
+    pm10: float | None = None
+    pm25: float | None = None
+    pm01: float | None = None
+    avoc_pm10: float | None = None
+    avoc_pm25: float | None = None
+    avoc_pm01: float | None = None
+    raw: RawRecord = Field(repr=False)
+
+
+class ForestDustStation(ForestModel):
+    """청정넷(AICAN) 산림 미세먼지 관측소 속성 레코드.
+
+    ``station_code``(``obsrr_tpcd``)는 ``ForestDustMeasurement.station_code``와
+    join key로 쓸 수 있는 관측소별 고유 식별 코드다. ``installed_at``은 vendor가
+    날짜(yyyyMMdd)까지만 제공해 시각 정보가 없으므로 시간대 변환 시 날짜가 밀리지
+    않도록 datetime이 아닌 원본 문자열로 노출한다.
+    """
+
+    station_name: str | None = None
+    station_code: str | None = None
+    station_group_code: str | None = None
+    description: str | None = None
+    address: str | None = None
+    installed_at: str | None = None
+    equipment_name: str | None = None
+    equipment_model: str | None = None
+    equipment_maker: str | None = None
+    equipment_reference_number: str | None = None
+    elevation: float | None = None
+    latitude: float | None = None
+    longitude: float | None = None
     raw: RawRecord = Field(repr=False)
 
 

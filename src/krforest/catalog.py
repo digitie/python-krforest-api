@@ -100,11 +100,16 @@ API_ENDPOINTS: tuple[ApiEndpoint, ...] = (
         url="https://apis.data.go.kr/1400377/mtweather/mountListSearch",
         detail_url=f"{DATA_GO_BASE}/15084696/openapi.do",
         description="산악기상 관측 지점과 기상 정보를 조회한다.",
-        notes="일부 인증키는 별도 활용신청 전 HTTP 403을 반환할 수 있다.",
+        notes=(
+            "일부 인증키는 별도 활용신청 전 HTTP 403을 반환할 수 있다. 응답 자체에는 "
+            "좌표·고도·지역명 필드가 없어 지점번호(obsid) 기준 정적 참조 테이블로 "
+            "채운다(krforest._mountain_stations). 개발계정 신청 가능 트래픽은 "
+            "10,000회/일이다."
+        ),
         response_format="json",
         response_type_param="_type",
         required_params=(),
-        optional_params=(),
+        optional_params=("localArea", "obsid", "tm"),
     ),
     ApiEndpoint(
         key="national_recreation_forest_reservations",
@@ -295,6 +300,57 @@ API_ENDPOINTS: tuple[ApiEndpoint, ...] = (
         url="http://apis.data.go.kr/1400000/ecndmInfoService/ecndmInfoList",
         detail_url=f"{DATA_GO_BASE}/15074803/openapi.do",
         description="사방댐 관리번호, 관리주소, 좌표, 관리기관 정보를 조회한다.",
+        required_params=(),
+        optional_params=(),
+    ),
+    ApiEndpoint(
+        key="forest_dust_measurements",
+        title="산림청 국립산림과학원_청정넷_측정데이터",
+        data_go_id="15078005",
+        categories=("safety",),
+        provider="data.go.kr",
+        service="1400377/AicanDustData",
+        operation="dustData",
+        url="https://apis.data.go.kr/1400377/AicanDustData/dustData",
+        detail_url=f"{DATA_GO_BASE}/15078005/openapi.do",
+        description=(
+            "청정넷(AICAN) 산림·도시숲 미세먼지 관측소의 PM10·PM2.5·PM1.0과 "
+            "온도·습도·풍향·풍속을 10분 단위로 제공한다."
+        ),
+        notes=(
+            "contentType 파라미터는 'JSON' 대문자여야 JSON 응답을 반환하며, 소문자 "
+            "'json'은 XML로 응답한다. 개발계정 신청 가능 트래픽은 1,000회/일이고 "
+            "운영계정은 활용사례 등록 후 증설을 신청할 수 있다."
+        ),
+        response_format="json",
+        response_type_param="contentType",
+        response_type_value="JSON",
+        required_params=(),
+        optional_params=("startDt", "endDt"),
+    ),
+    ApiEndpoint(
+        key="forest_dust_stations",
+        title="산림청 국립산림과학원_청정넷_운영현황",
+        data_go_id="15078013",
+        categories=("safety",),
+        provider="data.go.kr",
+        service="1400377/AicanObsrrInfo",
+        operation="obsrrInfo",
+        url="https://apis.data.go.kr/1400377/AicanObsrrInfo/obsrrInfo",
+        detail_url=f"{DATA_GO_BASE}/15078013/openapi.do",
+        description=(
+            "청정넷(AICAN) 미세먼지 관측소의 명칭, 좌표, 주소, 설치일, 장비 정보를 "
+            "제공한다."
+        ),
+        notes=(
+            "동일 API의 WMS/WFS 지도 조회 기능(obsrrInfoWms, obsrrInfoWFS)은 이미지·"
+            "GML 응답이라 구현하지 않고, JSON 속성 조회(obsrrInfo)만 구현한다. "
+            "contentType 파라미터는 'JSON' 대문자여야 JSON 응답을 반환한다. 개발계정 "
+            "신청 가능 트래픽은 1,000회/일이다."
+        ),
+        response_format="json",
+        response_type_param="contentType",
+        response_type_value="JSON",
         required_params=(),
         optional_params=(),
     ),
@@ -747,6 +803,7 @@ def _endpoint_catalog_entry(endpoint: ApiEndpoint) -> CatalogEntry:
         service_key_param=endpoint.service_key_param,
         response_format=endpoint.response_format,
         response_type_param=endpoint.response_type_param,
+        response_type_value=endpoint.response_type_value,
         required_params=endpoint.required_params,
         optional_params=endpoint.optional_params,
         notes=endpoint.notes,
