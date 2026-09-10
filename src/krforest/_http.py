@@ -259,6 +259,24 @@ def _decode_payload(
     )
 
 
+def _as_flat_result_body(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """response.header/body로 감싸지 않는 flat envelope의 body를 찾는다.
+
+    JSON은 ``resultCode``가 최상위에 바로 온다. XML은 ``xml_to_dict``가 항상
+    root tag 이름으로 한 번 더 감싸므로(예: ``<ResponseBaseDTO>`` ->
+    ``{"ResponseBaseDTO": {...}}``), root tag가 ``response``가 아닌 provider의
+    XML도 같은 방식으로 인식해야 한다. 두 경우 모두 아니면 ``None``을 반환한다.
+    """
+
+    if "resultCode" in payload:
+        return payload
+    if len(payload) == 1:
+        (root_value,) = payload.values()
+        if isinstance(root_value, dict) and "resultCode" in root_value:
+            return root_value
+    return None
+
+
 def _normalize_payload(
     payload: dict[str, Any],
     *,
@@ -275,6 +293,7 @@ def _normalize_payload(
             api_key=api_key,
         )
 
+    flat_body = _as_flat_result_body(payload)
     if "response" in payload:
         try:
             response = payload["response"]
@@ -288,14 +307,21 @@ def _normalize_payload(
                 response=payload,
                 failure_kind="parse",
             ) from exc
-    elif "resultCode" in payload:
+    elif flat_body is not None:
         # 청정넷(AICAN) 계열 등 일부 provider는 response.header/body로 감싸지 않고
-        # resultCode/resultMsg/items를 최상위에 바로 반환한다.
-        header = {"resultCode": payload.get("resultCode"), "resultMsg": payload.get("resultMsg")}
-        body = payload
+        # resultCode/resultMsg/items를 최상위에(JSON) 또는 임의의 XML root
+        # 태그(예: <ResponseBaseDTO>) 바로 아래에 반환한다. 빠진 키는 빈 문자열로
+        # 취급해 header.get(key, "")가 기대하는 "키 없음" 의미를 유지한다(값이
+        # 명시적으로 None/null이었던 경우에도 문자열 "None"이 새지 않도록 한다).
+        header = {
+            "resultCode": flat_body.get("resultCode") or "",
+            "resultMsg": flat_body.get("resultMsg") or "",
+        }
+        body = flat_body
     else:
         raise ForestParseError(
-            "response did not contain response.header/body",
+            "response contained neither response.header/body nor a "
+            "top-level resultCode",
             provider=provider,
             endpoint=endpoint,
             response=payload,

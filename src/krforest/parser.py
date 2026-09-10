@@ -49,9 +49,12 @@ def parse_mountain_weather(row: dict[str, Any]) -> MountainWeather:
     """산악기상 원본 레코드를 typed 관측 모델로 파싱한다.
 
     ``mountListSearch`` 응답 자체는 좌표·고도·지역명을 담지 않으므로,
-    ``obs_id``로 :data:`krforest._mountain_stations.MOUNTAIN_STATIONS` 정적
-    참조 테이블을 조회해 채운다. 응답에 좌표 필드가 실제로 포함된 경우(향후
-    provider 변경 등)에는 그 값을 우선한다.
+    ``obs_id``로 관측지점 정적 참조 테이블(라이브러리에 내장된 벤더 기술문서
+    스냅샷)을 조회해 ``latitude``/``longitude``/``elevation``/``region_name``
+    을 채운다. 응답에 좌표 필드가 실제로 포함된 경우(향후 provider 변경 등)에는
+    그 값을 우선한다. ``obs_name``은 항상 응답 그대로이며(참조 테이블로
+    보완하지 않는다), 참조 테이블에 없는 ``obs_id``는 네 필드 모두 ``None``으로
+    남는다.
     """
 
     key_map = _lower_key_map(row)
@@ -60,13 +63,14 @@ def parse_mountain_weather(row: dict[str, Any]) -> MountainWeather:
     latitude, longitude = extract_coordinate(row)
     if latitude is None and longitude is None and station is not None:
         latitude, longitude = station.latitude, station.longitude
-    obs_name = first_text(row, "obsname", "obsName", "obs_name", "관측소명", key_map=key_map)
     return MountainWeather(
         obs_id=obs_id,
-        obs_name=obs_name or (station.mountain_name if station else None),
+        obs_name=first_text(row, "obsname", "obsName", "obs_name", "관측소명", key_map=key_map),
         local_area=first_text(row, "localarea", "localArea", "local_area", "지역", key_map=key_map),
         region_name=station.region_name if station else None,
         elevation=station.elevation if station else None,
+        latitude=latitude,
+        longitude=longitude,
         observed_at=parse_datetime(
             first_text(row, "tm", "observedAt", "관측시간", key_map=key_map)
         ),
@@ -96,8 +100,6 @@ def parse_mountain_weather(row: dict[str, Any]) -> MountainWeather:
         ),
         wind_speed_10m=_first_float(row, "ws10m", "windSpeed10m", "풍속10m", key_map=key_map),
         wind_speed_2m=_first_float(row, "ws2m", "windSpeed2m", "풍속2m", key_map=key_map),
-        latitude=latitude,
-        longitude=longitude,
         raw=row,
     )
 

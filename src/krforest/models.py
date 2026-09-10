@@ -125,23 +125,42 @@ class CatalogEntry(ForestModel):
     notes: str | None = None
 
 
+class MountainStation(ForestModel):
+    """산악기상(mtweather) 관측지점의 정적 위치 메타데이터.
+
+    ``mountListSearch`` 응답 자체는 이 정보를 반환하지 않는다 — data.go.kr
+    15084696 기술문서의 "지점 상세 코드" 부록을 옮긴 라이브러리 내장 참조
+    테이블(``client.travel.mountain_weather_stations()``)에서만 얻을 수 있다.
+    라이브 API가 반환하는 관측소 전체(약 513개)를 100% 덮지 않는다(~454개,
+    ADR-010 참조) — 이 표에 없는 ``obs_id``는 ``MountainWeather``의
+    ``latitude``/``longitude``/``elevation``/``region_name``도 ``None``이다.
+    """
+
+    obs_id: str
+    region_name: str
+    mountain_name: str
+    latitude: float
+    longitude: float
+    elevation: float
+
+
 class MountainWeather(ForestModel):
     """산악기상 관측 지점과 기상 원본 레코드.
 
     원천 필드명(``hm10m``/``rn`` 등)은 ``raw``에 그대로 보존하고, map ETL이
     사용할 의미 있는 이름과 단위를 함께 제공한다.
 
-    ``mountListSearch`` 응답 자체에는 좌표·고도·지역명 필드가 없다.
-    ``latitude``/``longitude``/``elevation``/``region_name``은
-    ``_mountain_stations.MOUNTAIN_STATIONS`` 정적 참조 테이블에서
-    ``obs_id``로 조회해 채운 값이며, 해당 지점번호가 표에 없으면 ``None``이다.
+    ``mountListSearch`` 응답 자체에는 좌표·고도·지역명 필드가 없다. 이 모델의
+    ``latitude``/``longitude``/``elevation``/``region_name`` 네 필드는 응답에
+    없으면 ``client.travel.mountain_weather_stations()``가 반환하는 것과 같은
+    정적 참조 테이블에서 ``obs_id``로 조회해 채운 값이며, 해당 지점번호가
+    표에 없으면 네 필드 모두 ``None``이다. (``obs_name``을 포함한 다른 필드는
+    모두 응답 원본 그대로다.)
     """
 
     obs_id: str | None = None
     obs_name: str | None = None
     local_area: str | None = None
-    region_name: str | None = None
-    elevation: float | None = None
     observed_at: datetime | None = None
     temperature_10m: float | None = None
     temperature_2m: float | None = None
@@ -157,6 +176,8 @@ class MountainWeather(ForestModel):
     wind_direction_2m_name: str | None = None
     wind_speed_10m: float | None = None
     wind_speed_2m: float | None = None
+    region_name: str | None = None
+    elevation: float | None = None
     latitude: float | None = None
     longitude: float | None = None
     raw: RawRecord = Field(repr=False)

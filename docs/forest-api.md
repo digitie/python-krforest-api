@@ -59,21 +59,40 @@ Notes:
   The model exposes station identity, KST-aware observation time, 10 m/2 m
   temperature-humidity-wind fields, pressure and rainfall fields, while raw
   provider keys remain in `raw`. Accepts `local_area` (지역코드 01~17), `obs_id`
-  (지점번호), and `observed_at` (정확한 관측시간 `yyyyMMddHHmm`) as optional filters,
-  mapped to the vendor's `localArea`/`obsid`/`tm` params.
+  (지점번호), and `observation_time` (정확한 관측시간 `yyyyMMddHHmm`, not to be
+  confused with the parsed `datetime` in `MountainWeather.observed_at`) as
+  optional filters, mapped to the vendor's `localArea`/`obsid`/`tm` params.
+  개발계정 신청 가능 트래픽은 10,000회/일이다(청정넷/AICAN 계열의 1,000회/일과
+  다르다). **Note:** the vendor's `obsid` filter itself is broken — a live call
+  returns `totalCount=1` with an empty `items` list — so don't rely on it to
+  fetch a single known station; filter client-side instead.
   - **The live `mountListSearch` response never includes coordinates, elevation,
     or a region name** — confirmed both from the vendor's technical document
     (`03_산악기상정보_기술문서_v1.5(수정본).docx`, response field table) and by a
     real API call. `latitude`/`longitude`/`elevation`/`region_name` are instead
-    looked up by `obs_id` from `krforest._mountain_stations.MOUNTAIN_STATIONS`, a
-    454-entry static table transcribed from that document's "지점 상세 코드"
-    appendix. If the response ever does carry coordinate fields directly (future
-    provider change), those take priority over the static table. An unknown
-    `obs_id` leaves these fields `None` rather than raising.
+    looked up by `obs_id` from a 454-entry static table (transcribed from that
+    document's "지점 상세 코드" appendix) — `obs_name` is NOT enriched this way
+    and is always the response's own value. If the response ever does carry
+    coordinate fields directly (future provider change), those take priority
+    over the static table. An unknown `obs_id` leaves these four fields `None`
+    rather than raising.
+  - `client.travel.mountain_weather_stations()` returns that same 454-station
+    static table directly as `MountainStation` records (`obs_id`, `region_name`,
+    `mountain_name`, `latitude`, `longitude`, `elevation`, all required —
+    unlike `MountainWeather`'s optional versions of the same four fields). It's
+    a **synchronous, local-only** method (no HTTP call, matching
+    `client.catalog()`/`client.endpoints()`), sorted by `obs_id` ascending, and
+    is the supported way to enumerate or join against the reference data instead
+    of importing the internal `_mountain_stations` module.
+  - **Coverage gap:** the live API currently returns roughly 513 stations, but
+    the static table has only 454 rows (~88% coverage) — the vendor's technical
+    document appendix is itself a snapshot and lags the live registry. Don't
+    assume every returned row gets coordinates; check `latitude is not None`
+    per item.
   - The live response uses the literal string `"-"` as its missing-value
     sentinel for every dynamic field (temperature, humidity, wind, rainfall,
     pressure, observation time) — confirmed live: at the time of this review,
-    *every* one of the 513 stations returned `"-"` for all of them. Numeric
+    *every* one of the ~513 stations returned `"-"` for all of them. Numeric
     fields already become `None` as a side effect of `float("-")` raising
     `ValueError`; `wind_direction_10m_name`/`wind_direction_2m_name` (string
     compass-direction fields) needed an explicit `_none_if_dash` check in
@@ -120,9 +139,14 @@ Notes:
   string (not `datetime`) because the vendor only provides day precision; a
   KST-midnight `datetime` would shift a day when a consumer converts to another
   timezone. Both endpoints return a *flat* envelope (`resultCode`/`resultMsg`/
-  `items` at the JSON root, no `response.header/body` wrapper), which
-  `_http._normalize_payload` now detects alongside the existing nested and
-  `OpenAPI_ServiceResponse` shapes. Both endpoints also require the literal
+  `items` at the JSON root, no `response.header/body` wrapper). This vendor's
+  XML also lacks the usual `<response>` root tag — it uses `<ResponseBaseDTO>`
+  with `resultCode` directly underneath — so `_http._normalize_payload`
+  recognizes a flat envelope under *either* encoding: `resultCode` at the JSON
+  root, or one level under any single XML root tag. This matters if a caller
+  explicitly requests `response_format="xml"` (e.g. via the Streamlit debug
+  UI's format dropdown) for these two endpoints. Both endpoints also require
+  the literal
   uppercase `contentType=JSON` — lowercase `json` silently falls back to XML —
   so `ApiEndpoint.response_type_value` was added to override the default
   lowercase `"json"` value per endpoint. 개발계정 신청 가능 트래픽은 두 endpoint

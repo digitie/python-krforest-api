@@ -13,22 +13,35 @@
   `wind_direction_2m_name`)에는 그대로 남아 있던 것을 `_none_if_dash`로 고쳤다
   (숫자 필드는 이미 `ValueError` 부작용으로 우연히 `None`이었다).
 - `localArea`/`obsid`/`tm`을 `catalog.py` `optional_params`에 채우고
-  `client.travel.mountain_weather(local_area=, obs_id=, observed_at=)` named
-  kwarg를 추가했다. 개발계정 트래픽 한도(10,000회/일, 청정넷과 다름)도 확인해
-  기록했다.
-- 라이브 검증: obs_id=1890(파주 팔일봉) → 위도 37.78/경도 126.92/고도 242.0로
-  정확히 채워짐 확인. 다만 검증 시점 기준 513개 관측소 전부가 모든 동적
-  필드(기온/습도/풍향/풍속/강수량/관측시간)에서 `"-"`(결측)를 반환했다 — 이
-  라이브러리가 고칠 수 있는 문제가 아니며, 승인 단계 제한인지 실제 관측 공백인지
-  는 확인되지 않았다(ADR-010 후속 참조).
-- `pytest -q` 58 passed / live 11 passed·2 xfailed, `ruff`, `mypy --strict` 통과.
+  `client.travel.mountain_weather(local_area=, obs_id=, observation_time=)`
+  named kwarg를 추가했다. 개발계정 트래픽 한도(10,000회/일, 청정넷과 다름)도
+  확인해 기록했다.
+- **새 공개 API**: `MountainStation` 모델과
+  `client.travel.mountain_weather_stations()`(동기, 로컬 데이터)를 추가해
+  454개 관측지점 참조 테이블을 직접 조회할 수 있게 했다.
+- **PR 머지 전 2단계 적대적 리뷰(정확성 + 설계/컨벤션 관점, 각각 독립적으로
+  전체 diff 검토) 반영 완료**: 두 리뷰어가 공통으로 재현한 회귀
+  (named kwarg가 `**params`로 전달된 vendor 원본 파라미터명을 조용히
+  덮어쓰던 문제, `mountain_weather`와 `dust_measurements` 둘 다), 정확성
+  리뷰어가 454개 표 전체 지리 일관성 검사로 찾은 obsid 3901 지역명 오류
+  (충청남도→충청북도 정오표 수정), 청정넷 XML root tag(`<ResponseBaseDTO>`)
+  파싱 실패, flat envelope `resultMsg` 없을 때 `"None"` 누출, `mountain_weather`
+  의 `obsid` 필터 자체가 vendor 버그(`totalCount=1`인데 `items` 항상 빈
+  문자열)임을 확인해 그 필터에 의존하지 않도록 live test 재작성 등을 모두
+  고쳤다. ADR-010 "추가" 절 참조.
+- 정적 표(454개)가 라이브 관측소 전체(약 513개)를 100% 덮지 않음(~88%
+  coverage)을 확인해 문서·테스트 전반에 명시했다(100% 커버리지를 가정하지
+  않도록).
+- `pytest -q` 66 passed / live 11 passed·2 xfailed, `ruff`, `mypy --strict` 통과.
 
 ## 다음 해야 할 작업 (Next Task)
 
+- [ ] 리뷰·수정 완료 — PR 생성 및 CI 확인 후 머지.
 - [ ] 운영계정 승인 또는 다른 시점에 `mountain_weather` 라이브 데이터를 재확인해
   `"-"` 전역 결측이 승인 단계 문제인지 실제 공백인지 판별.
 - [ ] `_mountain_stations.py`는 벤더 기술문서 스냅샷이라 자동 동기화 메커니즘이
-  없다 — 벤더가 관측소를 추가/폐지하면 수동 재생성 필요.
+  없다 — 벤더가 관측소를 추가/폐지하면 수동 재생성 필요. 정적 표(454개)와
+  라이브 관측소(약 513개)의 갭(~59개)을 줄일 방법도 확인 필요.
 
 ## 현재 진척도 (2026-09-09)
 

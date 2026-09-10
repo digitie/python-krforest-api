@@ -105,6 +105,11 @@ weather = await client.travel.mountain_weather(num_of_rows=1)
 lat: float | None = weather.items[0].latitude
 lon: float | None = weather.items[0].longitude
 
+# mountListSearch 응답 자체에는 좌표가 없다 — 위 latitude/longitude는 아래
+# 정적 참조 테이블(로컬 데이터, 원격 호출 없음)에서 obs_id로 채운 값이다.
+stations = client.travel.mountain_weather_stations()
+gwanaksan = next(s for s in stations if s.obs_id == "1917")
+
 forests = await client.travel.recreation_forests(name="덕유산")
 address: str | None = forests[0].address
 forest_lat: float | None = forests[0].latitude

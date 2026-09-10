@@ -305,6 +305,24 @@ async def test_client_catalog_returns_human_readable_entries(fake_client_factory
     )
 
 
+def test_mountain_weather_stations_is_local_and_sync(fake_client_factory):
+    # 원격 호출이 아니라 로컬 정적 데이터라 세션이 전혀 쓰이지 않아야 한다.
+    client, session = fake_client_factory()
+
+    stations = client.travel.mountain_weather_stations()
+
+    assert len(stations) == 454
+    assert session.calls == []
+    gwanaksan = next(s for s in stations if s.obs_id == "1917")
+    assert gwanaksan.region_name == "서울특별시"
+    assert gwanaksan.mountain_name == "서울 관악산"
+    assert (gwanaksan.latitude, gwanaksan.longitude, gwanaksan.elevation) == (
+        37.45,
+        126.93,
+        382.0,
+    )
+
+
 async def test_mountain_weather_returns_place_coordinate(fake_client_factory):
     payload = public_payload(
         {
@@ -409,19 +427,52 @@ async def test_mountain_weather_unknown_station_leaves_enrichment_none(fake_clie
     assert item.obs_name == "미등록관측소"
 
 
-async def test_mountain_weather_maps_local_area_obs_id_and_observed_at_filters(
+async def test_mountain_weather_maps_local_area_obs_id_and_observation_time_filters(
     fake_client_factory,
 ):
     client, session = fake_client_factory(FakeResponse(public_payload([])))
 
     await client.travel.mountain_weather(
-        local_area="09", obs_id="1917", observed_at="202106301809", num_of_rows=1
+        local_area="09", obs_id="1917", observation_time="202106301809", num_of_rows=1
     )
 
     params = session.calls[0]["params"]
     assert params["localArea"] == "09"
     assert params["obsid"] == "1917"
     assert params["tm"] == "202106301809"
+
+
+async def test_mountain_weather_still_accepts_raw_wire_param_names_via_kwargs(
+    fake_client_factory,
+):
+    # 회귀 방지: local_area/obs_id/observation_time named kwarg를 추가하기 전에는
+    # **params로 벤더 원본 이름(localArea/obsid/tm)을 직접 전달하는 것이 유일한
+    # 방법이었다. named kwarg가 기본값 None으로 이 값을 덮어써서 조용히 사라지면
+    # 안 된다.
+    client, session = fake_client_factory(FakeResponse(public_payload([])))
+
+    await client.travel.mountain_weather(
+        localArea="09", obsid="1917", tm="202106301809", num_of_rows=1
+    )
+
+    params = session.calls[0]["params"]
+    assert params["localArea"] == "09"
+    assert params["obsid"] == "1917"
+    assert params["tm"] == "202106301809"
+
+
+async def test_dust_measurements_still_accepts_raw_wire_param_names_via_kwargs(
+    fake_client_factory,
+):
+    client, session = fake_client_factory(FakeResponse(flat_payload([])))
+
+    await client.safety.dust_measurements(
+        startDt="202009180000", endDt="202009190000", num_of_rows=1
+    )
+
+    params = session.calls[0]["params"]
+    assert params["startDt"] == "202009180000"
+    assert params["endDt"] == "202009190000"
 
 
 async def test_landslide_forecast_issues_are_typed(fake_client_factory):
@@ -545,6 +596,38 @@ async def test_dust_measurements_unrecognized_envelope_raises_parse_error(
 
     with pytest.raises(ForestParseError):
         await client.safety.dust_measurements(num_of_rows=1)
+
+
+async def test_dust_measurements_parses_vendor_xml_root_tag_flat_envelope(
+    fake_client_factory,
+):
+    # 청정넷(AICAN) XML은 <response>가 아니라 <ResponseBaseDTO>를 root tag로 쓴다
+    # (예: contentType을 명시적으로 xml로 요청했을 때). resultCode가 root tag
+    # 바로 아래에 오는 것도 flat envelope로 인식해야 한다.
+    xml = (
+        "<ResponseBaseDTO><resultCode>00</resultCode><resultMsg>OK</resultMsg>"
+        "<numOfRows>1</numOfRows><pageNo>1</pageNo><totalCount>1</totalCount>"
+        "<items><obsrt_dtm>201908252220</obsrt_dtm><obsrt_pm10_val>3.648</obsrt_pm10_val>"
+        "</items></ResponseBaseDTO>"
+    )
+    client, _session = fake_client_factory(FakeResponse(text=xml))
+
+    page = await client.raw_endpoint("forest_dust_measurements", {}, response_format="xml")
+
+    assert page.items[0]["obsrt_pm10_val"] == "3.648"
+    assert page.total_count == 1
+
+
+async def test_dust_measurements_xml_error_without_result_msg_does_not_leak_none(
+    fake_client_factory,
+):
+    xml = "<ResponseBaseDTO><resultCode>30</resultCode></ResponseBaseDTO>"
+    client, _session = fake_client_factory(FakeResponse(text=xml))
+
+    with pytest.raises(ForestAuthError) as exc_info:
+        await client.raw_endpoint("forest_dust_measurements", {}, response_format="xml")
+
+    assert "None" not in str(exc_info.value)
 
 
 async def test_dust_stations_parses_flat_envelope_and_coordinates(fake_client_factory):

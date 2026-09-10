@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
+from .models import MountainStation
+
 
 class MountainStationRef(NamedTuple):
     """산악기상 관측지점의 정적 메타데이터(좌표·고도는 API 응답에 없다)."""
@@ -214,7 +216,11 @@ MOUNTAIN_STATIONS: dict[str, MountainStationRef] = {
     "3898": MountainStationRef("충청북도", "보은 금단산", 36.61, 127.79, 627.0),
     "3899": MountainStationRef("충청북도", "옥천 탑산", 36.32, 127.64, 362.0),
     "3900": MountainStationRef("충청북도", "영동 삼봉산", 36.13, 127.84, 649.0),
-    "3901": MountainStationRef("충청남도", "괴산 대곡산", 36.89, 127.79, 264.0),
+    # 원본 문서는 이 지점의 지역명을 "충청남도"로 표기했으나, 괴산군은
+    # 충청북도 소속이고(표의 다른 "괴산" 관측소 4곳: 3022/3032/3894/3904도
+    # 모두 충청북도이며 인접 obsid 3900/3902/3903도 마찬가지) 벤더 문서의
+    # 정오표로 보고 충청북도로 바로잡았다.
+    "3901": MountainStationRef("충청북도", "괴산 대곡산", 36.89, 127.79, 264.0),
     "3902": MountainStationRef("충청북도", "단양 태화산", 37.09, 128.47, 665.0),
     "3903": MountainStationRef("충청북도", "보은 염동산", 36.49, 127.64, 282.0),
     "3904": MountainStationRef("충청북도", "괴산 송인산", 36.77, 127.68, 434.0),
@@ -478,3 +484,23 @@ MOUNTAIN_STATIONS: dict[str, MountainStationRef] = {
     "9913": MountainStationRef("제주도", "난대림연구소", 33.36, 126.64, 487.0),
     "9914": MountainStationRef("제주도", "제주 들위오름", 33.42, 126.54, 542.0),
 }
+
+
+def mountain_stations() -> tuple[MountainStation, ...]:
+    """정적 참조 테이블 전체를 공개 모델 튜플로 반환한다.
+
+    라이브 API 호출이 아니라 라이브러리에 내장된 로컬 데이터만 사용하므로
+    동기 함수다. `obs_id` 오름차순으로 정렬해 반환한다.
+    """
+
+    return tuple(
+        MountainStation(
+            obs_id=obs_id,
+            region_name=ref.region_name,
+            mountain_name=ref.mountain_name,
+            latitude=ref.latitude,
+            longitude=ref.longitude,
+            elevation=ref.elevation,
+        )
+        for obs_id, ref in sorted(MOUNTAIN_STATIONS.items(), key=lambda item: int(item[0]))
+    )

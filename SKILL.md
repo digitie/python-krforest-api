@@ -57,6 +57,9 @@ src/krforest/
   _http.py      — transport, 응답 envelope 정규화, 오류 매핑, 키 마스킹
   _convert.py   — 응답 경계의 작은 변환 helper
   _ratelimit.py — 비동기 토큰 버킷 (max_rps)
+  _mountain_stations.py — 산악기상(mtweather) 관측지점 좌표·고도 정적 참조
+                          테이블(벤더 기술문서 스냅샷). 벤더가 관측소를
+                          추가/폐지하면 수동 재생성 필요 (ADR-010 참조)
   catalog.py    — 구현 대상 OpenAPI와 파일데이터의 curated catalog
   models.py     — 공개 Pydantic 모델 (frozen)
   parser.py     — 원격 row → 공개 모델 변환 (단일 row 책임)
@@ -100,6 +103,7 @@ docs/
 | 디버그 fixture 저장 | `await client.debug_endpoint(...)` → `save_fixture(...)` |
 | replay 테스트 추가 | `tests/test_replay.py`, `tests/test_generated_fixtures.py` 참조 |
 | 한도 안전한 동시 호출 | `_ratelimit.AsyncTokenBucket` (기본 5 RPS) |
+| 벤더 기술문서(.docx) 정적 참조 테이블 갱신 | data.go.kr 상세 페이지 첨부 `.docx`를 다시 받아 스크립트로 재파싱(수기 필사 금지) → `_mountain_stations.py` 같은 모듈 재생성 → 데이터 범위(예: obsid coverage) 변화를 문서에 반영 |
 
 ## 6. 도메인 어휘
 

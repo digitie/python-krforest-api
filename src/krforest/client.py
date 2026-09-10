@@ -15,6 +15,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from ._http import AsyncSessionLike, ForestHttp, ResponseLike
+from ._mountain_stations import mountain_stations
 from .catalog import (
     FOREST_GO_FILE_DOWNLOAD_HISTORY_URL,
     FOREST_GO_FILE_DOWNLOAD_POPUP_URL,
@@ -43,6 +44,7 @@ from .models import (
     ForestSpatialFeature,
     ForestSpatialPoint,
     LandslideForecastIssue,
+    MountainStation,
     MountainWeather,
     Page,
     RawRecord,
@@ -421,7 +423,7 @@ class TravelNamespace:
         *,
         local_area: str | None = None,
         obs_id: str | None = None,
-        observed_at: str | None = None,
+        observation_time: str | None = None,
         page_no: int = 1,
         num_of_rows: int = 10,
         **params: Any,
@@ -429,19 +431,36 @@ class TravelNamespace:
         """국립산림과학원 산악기상 레코드를 조회한다.
 
         `local_area`는 지역코드(01=서울특별시 ... 17=제주도), `obs_id`는
-        지점번호, `observed_at`은 정확한 관측시간(yyyyMMddHHmm)으로 필터링한다.
+        지점번호, `observation_time`은 정확한 관측시간(yyyyMMddHHmm 문자열, vendor
+        파라미터명 `tm`)으로 필터링한다. `MountainWeather.observed_at`(파싱된
+        `datetime`)과 이름이 겹치지 않도록 의도적으로 다른 이름을 쓴다.
         """
 
         query = dict(params)
-        query["localArea"] = local_area
-        query["obsid"] = obs_id
-        query["tm"] = observed_at
+        if local_area is not None:
+            query["localArea"] = local_area
+        if obs_id is not None:
+            query["obsid"] = obs_id
+        if observation_time is not None:
+            query["tm"] = observation_time
         return await self._client._page(
             api_endpoint("mountain_weather"),
             _page_params(query, page_no=page_no, num_of_rows=num_of_rows),
             MountainWeather,
             parse_mountain_weather,
         )
+
+    def mountain_weather_stations(self) -> tuple[MountainStation, ...]:
+        """산악기상 관측지점 454개의 위치·고도 정적 참조 테이블을 반환한다.
+
+        원격 호출이 아니라 라이브러리에 내장된 로컬 데이터라 동기 함수다
+        (`client.catalog()`/`client.endpoints()`와 동일한 성격). `obs_id`로
+        정렬돼 있으며, `mountain_weather()`가 반환하는 `MountainWeather.obs_id`
+        와 join할 수 있다. 라이브 API가 실제로 운영하는 관측소(약 513개)를
+        100% 덮지는 않는다(~88% coverage, ADR-010 참조).
+        """
+
+        return mountain_stations()
 
     async def recreation_forest_reservations(
         self,
@@ -771,11 +790,17 @@ class SafetyNamespace:
         num_of_rows: int = 10,
         **params: Any,
     ) -> Page[ForestDustMeasurement]:
-        """청정넷(AICAN) 관측소별 미세먼지·기상 측정 레코드를 조회한다."""
+        """청정넷(AICAN) 관측소별 미세먼지·기상 측정 레코드를 조회한다.
+
+        `start_date`/`end_date`는 초 단위까지 포함한 `yyyyMMddHHmmss` 문자열
+        (vendor 파라미터명 `startDt`/`endDt`)이다. 날짜만 있는 값이 아니다.
+        """
 
         query = dict(params)
-        query["startDt"] = start_date
-        query["endDt"] = end_date
+        if start_date is not None:
+            query["startDt"] = start_date
+        if end_date is not None:
+            query["endDt"] = end_date
         return await self._client._page(
             api_endpoint("forest_dust_measurements"),
             _page_params(query, page_no=page_no, num_of_rows=num_of_rows),

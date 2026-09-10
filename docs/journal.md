@@ -2,6 +2,63 @@
 
 역시간순(최근 작업이 위로)으로 작업 사항을 기록합니다. 작업이 완료되면 이 문서에 기록을 추가하세요.
 
+## [2026-09-10] 산악기상 관측지점 정적 테이블을 공개 API로 승격
+- **작업자**: Claude Sonnet 5 (Claude Code)
+- **내용**: 리뷰에서 `MountainWeather` docstring이 export되지 않은 내부 모듈
+  (`_mountain_stations.MOUNTAIN_STATIONS`)을 가리킨다는 지적이 있었고, 이어서
+  사용자가 "station 위치 정보도 함께 리턴하도록 반영해"라고 요청했다. 새 공개
+  모델 `MountainStation`(6개 필드 전부 필수)과 새 메서드
+  `client.travel.mountain_weather_stations() -> tuple[MountainStation, ...]`을
+  추가했다. 원격 호출이 없는 로컬 데이터 조회라 `client.catalog()`처럼
+  동기(sync) 메서드로 만들었고, `obs_id` 오름차순으로 정렬해 반환한다.
+  `MountainWeather`/`_mountain_stations.py`의 docstring이 이 새 메서드를
+  가리키도록 갱신했다.
+- **검증**: `pytest -q` 66 passed / live 11 passed·2 xfailed, `ruff check .`,
+  `mypy src/krforest` 통과. `client.travel.mountain_weather_stations()`가
+  세션을 전혀 쓰지 않는지(순수 로컬 데이터) 단위 테스트로 확인했다.
+
+## [2026-09-10] PR 머지 전 2단계 적대적 리뷰 반영 (청정넷 + 산악기상)
+- **작업자**: Claude Sonnet 5 (Claude Code)
+- **내용**: `feat/aican-dust-and-mountain-weather-fix` 브랜치를 `origin/main`에서
+  새로 만들어 커밋·푸시한 뒤, 전문 리뷰어 서브에이전트 2명(정확성 관점 + API
+  설계/컨벤션 관점)이 독립적으로 전체 diff를 검토했다. 두 리뷰어가 **동일한
+  회귀를 각자 재현**해 확정했다:
+  - `client.travel.mountain_weather(local_area=, obs_id=, observed_at=)`가
+    `**params`로 벤더 원본 이름(`localArea`/`obsid`/`tm`)을 직접 전달하던 기존
+    호출 방식을 조용히 깨뜨리고 있었다(named kwarg 기본값 `None`이 무조건
+    덮어씀). `dust_measurements(startDt=, endDt=)`도 같은 문제였다. `if x is
+    not None:` 가드로 고치고 회귀 테스트 2건을 추가했다.
+  - 정확성 리뷰어가 454개 관측지점 표 전체에 대해 지리적 최근접 이웃
+    일관성 검사를 돌려, obsid 3901 "괴산 대곡산"이 원본 문서에 충청남도로
+    잘못 기재된 것을 찾아냈다(괴산군은 충청북도 소속). 정오표로 보고
+    바로잡고, "괴산" 5곳 전체가 충청북도인지 확인하는 회귀 테스트를 추가했다.
+  - 정확성 리뷰어가 청정넷(AICAN) endpoint에 `contentType=xml`을 명시적으로
+    요청(예: Streamlit 디버그 UI 포맷 선택)하면 벤더의 XML root tag가
+    `<response>`가 아니라 `<ResponseBaseDTO>`라 파싱에 실패하는 것을 재현했다.
+    `_http._normalize_payload`의 flat envelope 인식을 JSON뿐 아니라 임의의
+    단일 XML root tag 아래에도 적용하도록 일반화해 고쳤다. 같은 리뷰어가
+    flat envelope에서 `resultMsg`가 없으면 문자열 `"None"`이 에러 메시지에
+    새는 것도 찾아 함께 고쳤다.
+  - `mountain_weather`의 obsid 필터 자체가 vendor 버그(`totalCount=1`인데
+    `items`가 항상 빈 문자열)임을 라이브로 재확인해, 그 필터에 의존하던 live
+    test를 필터 없이 받은 배치 중 정적 표에 있는 항목만 검증하도록 다시 짰다.
+  - 설계 리뷰어가 라이브 API(~513개)와 정적 표(454개)의 커버리지 갭(~88%)이
+    문서 어디에도 없고 live test가 100% 커버리지를 암묵적으로 가정하고 있음을
+    지적했다 — `forest-api.md`/`decisions.md`에 수치를 명시했다.
+  - 그 외 반영: `observed_at`(client param) → `observation_time`으로 개명
+    (모델의 `datetime` 필드 `observed_at`과 이름 충돌 방지), 문서화되지 않은
+    `obs_name` 정적 표 fallback 제거, `region_name`/`elevation`을
+    `latitude`/`longitude` 옆으로 재배치, tautological한 단위 테스트 assertion
+    제거, `SKILL.md` 모듈 지도에 `_mountain_stations.py` 추가, ADR-010에
+    ADR-006(parser/processor 경계) 참조 추가.
+  - 리뷰에서 나왔지만 반영하지 않은 것: 한 리뷰어가 "contentType 소문자
+    override 시 데이터가 조용히 유실된다"고 주장했으나, 실제 vendor XML root
+    tag(`<ResponseBaseDTO>`)로 직접 재현한 결과 `ForestParseError`가 깔끔하게
+    발생함을 확인해(잘못된 root tag 가정에 근거한 주장) 반영하지 않았다.
+- **검증**: `pytest -q` 63 passed / live 11 passed·2 xfailed, `ruff check .`,
+  `mypy src/krforest` 통과. 실제 서비스키로 XML 강제 요청·obsid 필터 버그·
+  괴산 수정을 모두 라이브/단위 테스트로 재확인했다.
+
 ## [2026-09-10] 산악기상정보(mountain_weather) API 실사용 결함 수정
 - **작업자**: Claude Sonnet 5 (Claude Code)
 - **내용**:

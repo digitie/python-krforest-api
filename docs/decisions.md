@@ -399,6 +399,15 @@ ADR-009와 같은 방식(data.go.kr 상세 페이지 첨부 `.docx` 기술문서
 - `"-"` 결측 처리는 숫자 필드에서 이미 우연히 맞았던 동작을 문자열 필드에도
   동일하게 명시적으로 적용해 일관성을 맞춘 것뿐이며, 새로운 정책을 도입한 것은
   아니다.
+- **`parser.py` vs `processor.py` 경계(SKILL.md 규칙 12).** `obs_id` 기준
+  정적 표 조회는 ADR-006이 `parser.py`의 책임으로 정의한 "단일 remote row →
+  공개 모델" 변환의 일부로 본다 — 두 번째 row나 별도 다운로드 파일을 join하지
+  않고, in-package 상수를 참조할 뿐이기 때문이다. ADR-006이 실제로
+  `parse_mountain_weather`를 `parser.py` 예시로 들고 있기도 하다. 반대로
+  `processor.py`는 "여러 **파일**·여러 row를 join"하는 경우(휴양림 CSV 4개
+  join 등)를 위한 것이라 이 조회에는 맞지 않는다. `client.py::_page()`가
+  `parser: Callable[[dict], T]` 시그니처(단일 row 입력)로 고정돼 있어,
+  `processor.py`로 옮기면 파이프라인에 불필요한 단계가 하나 더 생긴다.
 
 ### 결과(긍정)
 - `client.travel.mountain_weather()`가 실제 서비스키로도 `latitude`/
@@ -406,16 +415,17 @@ ADR-009와 같은 방식(data.go.kr 상세 페이지 첨부 `.docx` 기술문서
   검증: obs_id=1890 → 위도 37.78/경도 126.92/고도 242.0/서울특별시 인접
   경기도, 문서 표 값과 일치).
 - 알려지지 않은 `obs_id`에 대해서도 예외 없이 `None`으로 안전하게 동작한다.
-- `local_area`/`obs_id`/`observed_at` 필터가 카탈로그와 client signature에
+- `local_area`/`obs_id`/`observation_time` 필터가 카탈로그와 client signature에
   모두 드러나 디버그 UI·자동완성에서 발견 가능해졌다.
 
 ### 결과(부정)
 - `_mountain_stations.py`가 454줄짜리 정적 데이터 파일이라 저장소에 큰 상수
   블록이 추가된다. 벤더가 관측소를 추가·폐지하면 수동으로 갱신해야 한다(자동
   동기화 메커니즘은 없다).
-- 정적 표와 라이브 API의 `obsid`가 어긋나는 경우(신규 관측소가 아직 표에 없는
-  경우 등) 좌표 없이 `None`으로만 남으므로, 완전한 좌표 커버리지를 보장하지는
-  않는다.
+- **정적 표(454개)가 라이브 API의 실제 관측소(약 513개)를 100% 덮지 못한다
+  (~88% coverage)** — 라이브로 확인했다. 표에 없는 ~59개 `obs_id`는 좌표
+  없이 `None`으로만 남는다. `docs/forest-api.md`와 live test에 이 사실을
+  명시했다(전량 커버리지를 가정하지 않도록).
 
 ### 후속
 - (open) 벤더가 기술문서를 갱신하면(새 관측소 추가 등) `_mountain_stations.py`도
@@ -423,3 +433,63 @@ ADR-009와 같은 방식(data.go.kr 상세 페이지 첨부 `.docx` 기술문서
 - (open) 라이브 API가 모든 관측소에 대해 지속적으로 `"-"`만 반환하는 이유(승인
   단계 제한인지, 실제 관측 공백인지)는 확인되지 않았다. 운영계정 승인 후
   재확인이 필요하다.
+- (open) 정적 표(454개)와 라이브 관측소(약 513개)의 갭(~59개)을 줄이려면
+  벤더가 별도 지점 목록 API를 제공하는지 확인하거나, 기술문서 최신판을
+  주기적으로 재확인해야 한다.
+
+### 추가(2단계 적대적 리뷰 반영, 2026-09-10)
+전문 리뷰어 2명(정확성 관점 + API 설계/컨벤션 관점)의 독립적 리뷰를 거쳐 다음을
+반영했다:
+- **[확정된 회귀] `client.travel.mountain_weather(local_area=, obs_id=,
+  observation_time=)`가 도입되기 전에는 `**params`로 벤더 원본 이름
+  (`localArea`/`obsid`/`tm`)을 직접 전달하는 것이 유일한 방법이었다. named
+  kwarg를 무조건(`query["localArea"] = local_area`) 대입해 덮어쓰는 최초
+  구현은 이 값을 기본값 `None`으로 조용히 지워 기존 호출을 깨뜨렸다(두 리뷰어
+  모두 재현). `if x is not None:` 가드로 고쳤고, 같은 문제가 있던
+  `dust_measurements(startDt=, endDt=)`도 함께 고쳤다. 회귀 테스트 2건 추가.
+- **obsid 필터 자체가 vendor 버그다** — `mountListSearch?obsid=1917`을 라이브
+  호출하면 `totalCount=1`인데 `items`가 항상 빈 문자열로 온다. 그래서 live
+  test는 이 필터에 의존하지 않고, 필터 없이 받은 배치 중 정적 표에 있는
+  항목만 골라 그 값이 표와 일치하는지 검증하도록 다시 작성했다.
+- **`obsid` 3901 "괴산 대곡산"이 원본 문서에 충청남도로 잘못 기재**돼 있었다
+  (괴산군은 충청북도 소속이고 표의 다른 괴산 관측소 4곳도 모두 충청북도).
+  정오표로 보고 충청북도로 바로잡고, 회귀 테스트를 추가했다(리뷰어가 454개
+  전체에 대한 지리적 최근접 이웃 일관성 검사로 발견).
+- `_http._normalize_payload`의 flat envelope 인식을 JSON(`resultCode`가
+  최상위)뿐 아니라 XML(임의의 단일 root tag 바로 아래 `resultCode`가 오는
+  경우, 예: 청정넷의 `<ResponseBaseDTO>`)에도 적용하도록 일반화했다 —
+  `contentType`을 명시적으로 `xml`로 요청하면(예: Streamlit 디버그 UI의 포맷
+  선택) 이전에는 파싱에 실패했다.
+- flat envelope 구성 시 `resultMsg`가 없으면 문자열 `"None"`이 에러 메시지에
+  새던 것을 고쳤다(`payload.get(k) or ""`).
+- `MountainWeather.observed_at`(파싱된 `datetime`)과 이름이 겹치던 client
+  파라미터를 `observed_at` → `observation_time`(문자열)으로 바꿨다.
+- `obs_name`은 정적 표로 보완하지 않기로 하고 그 fallback을 제거했다(문서화
+  범위를 네 필드로 유지하기 위해). `region_name`/`elevation`을
+  `latitude`/`longitude`와 나란히 두도록 모델 필드 순서를 바꿨다(같은 세션에
+  추가된 `ForestDustStation`의 필드 그룹핑과 일치).
+- `tests/test_mountain_stations.py`의 `len(set(MOUNTAIN_STATIONS)) ==
+  len(MOUNTAIN_STATIONS)` assertion은 dict 정의상 항상 참인 tautology라
+  제거하고, 대신 "괴산" 관측소 5곳이 모두 충청북도인지 확인하는 회귀
+  테스트로 대체했다("같은 시/군 접두사는 항상 같은 지역명" 같은 일반 규칙은
+  고성(강원/경남)·군위(경북/대구) 같은 정당한 예외가 있어 채택하지 않았다).
+
+### 추가(공개 accessor 도입, 2026-09-10)
+리뷰에서 "`MountainWeather`의 docstring이 export되지 않은 내부 모듈
+(`_mountain_stations.MOUNTAIN_STATIONS`)을 가리킨다"는 지적(위 리뷰 결과의
+finding #14)이 있었고, 곧이어 사용자가 "station 위치 정보도 함께 리턴하도록"
+요청했다. 두 요구를 함께 해소하기 위해 정적 참조 테이블을 공개 API로
+승격했다.
+
+- 새 공개 모델 `MountainStation`(`obs_id`/`region_name`/`mountain_name`/
+  `latitude`/`longitude`/`elevation`, 전부 필수 — `MountainWeather`의 동명
+  optional 필드와 달리 참조 테이블 자체는 결측이 없다).
+- 새 메서드 `client.travel.mountain_weather_stations() -> tuple[MountainStation, ...]`.
+  원격 호출이 없는 로컬 데이터 조회라 `client.catalog()`/`client.endpoints()`
+  와 같은 성격의 **동기(sync)** 메서드로 만들었다 — `TravelNamespace`의 다른
+  메서드는 전부 async이지만, `ForestClient` 자체에 이미 동기 accessor
+  선례가 있어 어색하지 않다고 판단했다.
+- `MountainWeather`/`_mountain_stations.py`의 docstring을 이 새 메서드를
+  가리키도록 갱신해 더 이상 존재하지 않는(비공개) import 경로를 문서에
+  남기지 않는다.
+- `obs_id`로 join 가능하도록 오름차순 정렬해 반환한다.

@@ -14,7 +14,7 @@ TripMate 여행지도 앱에서 산림청 공공데이터를 단순 POI 목록�
 
 | 축 | 데이터 | 구현 경로 | 여행지도 활용 |
 | --- | --- | --- | --- |
-| 산악기상 | 산림청 국립산림과학원 산악기상정보 | `await client.travel.mountain_weather()` | 산행 전 기온, 습도, 풍속, 강수량, 지면온도 상태 카드 |
+| 산악기상 | 산림청 국립산림과학원 산악기상정보 | `await client.travel.mountain_weather()`, `client.travel.mountain_weather_stations()`(관측지점 좌표·고도, 로컬 정적 데이터·동기) | 산행 전 기온, 습도, 풍속, 강수량, 지면온도 상태 카드, 지도 위 관측소 위치 마커 |
 | 등산로 | 등산로정보 ZIP, 등산로 OpenAPI | `await client.travel.forest_trail_file_features()`, `await client.travel.forest_spatial_trails()` | 지도 위 등산로 geometry, 코스명, 주변 POI 연결 |
 | 둘레길 | 둘레길정보 ZIP, 숲길 서비스 API | `await client.travel.dulle_trail_features()`, `await client.travel.forest_services()` | 걷기 코스 경로, 거리, 예상 소요시간 카드 |
 | 명산 | 산 정보, 명산등산로, 100대명산 파일데이터 | `await client.travel.mountain_stories()`, `await client.travel.famous_mountain_trails()` | 산 상세, 접근성, 추천 코스, 주변 콘텐츠 연결 |
@@ -60,7 +60,9 @@ TripMate 여행지도 앱에서 산림청 공공데이터를 단순 POI 목록�
   상태에 따라 HTTP 403을 반환할 수 있다. 앱에서는 인증 실패와 실제 데이터 없음 상태를
   구분해야 한다.
 - 산악기상은 실시간 데이터에 가깝지만 관측 지점이 제한적이다. 특정 산 전체의 안전 판정처럼
-  표현하지 말고 관측 지점 기준 정보임을 UI에 드러낸다.
+  표현하지 말고 관측 지점 기준 정보임을 UI에 드러낸다. `mountain_weather()`의 좌표는 API
+  응답이 아니라 라이브러리 내장 정적 참조 테이블에서 채운 값이며 라이브 관측소 전체(약
+  513개)의 ~88%만 커버한다 — 지도에 표시하기 전 `latitude is not None`을 확인한다.
 - 산사태위험지도 원본은 대용량 raster 파일이므로 모바일 앱에 직접 내려주지 않는다.
 - 파일데이터 다운로드 결과의 갱신일을 추적하고, 캐시 갱신 실패 시 이전 데이터의 최신성
   문구를 함께 보여준다.
