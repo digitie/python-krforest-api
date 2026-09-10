@@ -2,6 +2,162 @@
 
 역시간순(최근 작업이 위로)으로 작업 사항을 기록합니다. 작업이 완료되면 이 문서에 기록을 추가하세요.
 
+## [2026-09-10] 산악기상 관측지점 정적 테이블을 공개 API로 승격
+- **작업자**: Claude Sonnet 5 (Claude Code)
+- **내용**: 리뷰에서 `MountainWeather` docstring이 export되지 않은 내부 모듈
+  (`_mountain_stations.MOUNTAIN_STATIONS`)을 가리킨다는 지적이 있었고, 이어서
+  사용자가 "station 위치 정보도 함께 리턴하도록 반영해"라고 요청했다. 새 공개
+  모델 `MountainStation`(6개 필드 전부 필수)과 새 메서드
+  `client.travel.mountain_weather_stations() -> tuple[MountainStation, ...]`을
+  추가했다. 원격 호출이 없는 로컬 데이터 조회라 `client.catalog()`처럼
+  동기(sync) 메서드로 만들었고, `obs_id` 오름차순으로 정렬해 반환한다.
+  `MountainWeather`/`_mountain_stations.py`의 docstring이 이 새 메서드를
+  가리키도록 갱신했다.
+- **검증**: `pytest -q` 66 passed / live 11 passed·2 xfailed, `ruff check .`,
+  `mypy src/krforest` 통과. `client.travel.mountain_weather_stations()`가
+  세션을 전혀 쓰지 않는지(순수 로컬 데이터) 단위 테스트로 확인했다.
+
+## [2026-09-10] PR 머지 전 2단계 적대적 리뷰 반영 (청정넷 + 산악기상)
+- **작업자**: Claude Sonnet 5 (Claude Code)
+- **내용**: `feat/aican-dust-and-mountain-weather-fix` 브랜치를 `origin/main`에서
+  새로 만들어 커밋·푸시한 뒤, 전문 리뷰어 서브에이전트 2명(정확성 관점 + API
+  설계/컨벤션 관점)이 독립적으로 전체 diff를 검토했다. 두 리뷰어가 **동일한
+  회귀를 각자 재현**해 확정했다:
+  - `client.travel.mountain_weather(local_area=, obs_id=, observed_at=)`가
+    `**params`로 벤더 원본 이름(`localArea`/`obsid`/`tm`)을 직접 전달하던 기존
+    호출 방식을 조용히 깨뜨리고 있었다(named kwarg 기본값 `None`이 무조건
+    덮어씀). `dust_measurements(startDt=, endDt=)`도 같은 문제였다. `if x is
+    not None:` 가드로 고치고 회귀 테스트 2건을 추가했다.
+  - 정확성 리뷰어가 454개 관측지점 표 전체에 대해 지리적 최근접 이웃
+    일관성 검사를 돌려, obsid 3901 "괴산 대곡산"이 원본 문서에 충청남도로
+    잘못 기재된 것을 찾아냈다(괴산군은 충청북도 소속). 정오표로 보고
+    바로잡고, "괴산" 5곳 전체가 충청북도인지 확인하는 회귀 테스트를 추가했다.
+  - 정확성 리뷰어가 청정넷(AICAN) endpoint에 `contentType=xml`을 명시적으로
+    요청(예: Streamlit 디버그 UI 포맷 선택)하면 벤더의 XML root tag가
+    `<response>`가 아니라 `<ResponseBaseDTO>`라 파싱에 실패하는 것을 재현했다.
+    `_http._normalize_payload`의 flat envelope 인식을 JSON뿐 아니라 임의의
+    단일 XML root tag 아래에도 적용하도록 일반화해 고쳤다. 같은 리뷰어가
+    flat envelope에서 `resultMsg`가 없으면 문자열 `"None"`이 에러 메시지에
+    새는 것도 찾아 함께 고쳤다.
+  - `mountain_weather`의 obsid 필터 자체가 vendor 버그(`totalCount=1`인데
+    `items`가 항상 빈 문자열)임을 라이브로 재확인해, 그 필터에 의존하던 live
+    test를 필터 없이 받은 배치 중 정적 표에 있는 항목만 검증하도록 다시 짰다.
+  - 설계 리뷰어가 라이브 API(~513개)와 정적 표(454개)의 커버리지 갭(~88%)이
+    문서 어디에도 없고 live test가 100% 커버리지를 암묵적으로 가정하고 있음을
+    지적했다 — `forest-api.md`/`decisions.md`에 수치를 명시했다.
+  - 그 외 반영: `observed_at`(client param) → `observation_time`으로 개명
+    (모델의 `datetime` 필드 `observed_at`과 이름 충돌 방지), 문서화되지 않은
+    `obs_name` 정적 표 fallback 제거, `region_name`/`elevation`을
+    `latitude`/`longitude` 옆으로 재배치, tautological한 단위 테스트 assertion
+    제거, `SKILL.md` 모듈 지도에 `_mountain_stations.py` 추가, ADR-010에
+    ADR-006(parser/processor 경계) 참조 추가.
+  - 리뷰에서 나왔지만 반영하지 않은 것: 한 리뷰어가 "contentType 소문자
+    override 시 데이터가 조용히 유실된다"고 주장했으나, 실제 vendor XML root
+    tag(`<ResponseBaseDTO>`)로 직접 재현한 결과 `ForestParseError`가 깔끔하게
+    발생함을 확인해(잘못된 root tag 가정에 근거한 주장) 반영하지 않았다.
+- **검증**: `pytest -q` 63 passed / live 11 passed·2 xfailed, `ruff check .`,
+  `mypy src/krforest` 통과. 실제 서비스키로 XML 강제 요청·obsid 필터 버그·
+  괴산 수정을 모두 라이브/단위 테스트로 재확인했다.
+
+## [2026-09-10] 산악기상정보(mountain_weather) API 실사용 결함 수정
+- **작업자**: Claude Sonnet 5 (Claude Code)
+- **내용**:
+  - "산악 날씨 api도 손봐" 요청에 따라 `client.travel.mountain_weather()`를
+    data.go.kr 15084696 상세 페이지 첨부 기술문서
+    (`03_산악기상정보_기술문서_v1.5(수정본).docx`)와 실제 라이브 호출로 재검토했다.
+  - **핵심 결함**: 실제 `mountListSearch` 응답에는 좌표·고도·지역명 필드가 전혀
+    없는데(기술문서 응답 필드 표로 확인), 기존 parser는 `xValue`/`yValue` 같은
+    필드가 있다고 가정했다. 기존 단위 테스트도 그런 필드를 포함한 합성 payload로
+    통과하고 있어서 실제로는 라이브 호출 시 좌표가 항상 `None`이었다는 사실이
+    가려져 있었다.
+  - 기술문서 부록의 "지점 상세 코드" 표(454개 관측지점의 지역명·산이름·지점번호·
+    위도·경도·고도)를 스크립트로 파싱해 `src/krforest/_mountain_stations.py`
+    (`MOUNTAIN_STATIONS`)로 만들었다. `parse_mountain_weather`가 `obs_id`로 이
+    표를 조회해 `latitude`/`longitude`/`elevation`/`region_name`(신규 필드)을
+    채운다. row에 좌표가 실제로 있으면 정적 표보다 우선한다.
+  - 응답의 결측 sentinel이 문자열 `"-"`임을 확인했다(라이브 검증 시점 기준 513개
+    관측소 전부가 모든 동적 필드에서 `"-"`를 반환 — 전역적 상태로 보이며 이
+    라이브러리가 고칠 수 있는 문제는 아니다). 숫자 필드는 `float("-")`의
+    `ValueError`로 이미 우연히 `None`이 됐지만, `wind_direction_10m_name`/
+    `wind_direction_2m_name`(문자열 방위 필드)은 그대로 `"-"`가 남아 있어
+    `_none_if_dash` 헬퍼로 고쳤다.
+  - `localArea`/`obsid`/`tm`이 문서에 명시된 선택 파라미터인데도 카탈로그
+    `optional_params`가 비어 있었다 — 채우고, `client.travel.mountain_weather()`
+    에 `local_area`/`obs_id`/`observed_at` named kwarg를 추가했다(다른
+    endpoint와 시그니처 관례 통일).
+  - 개발계정 신청 가능 트래픽이 10,000회/일(청정넷의 1,000회/일과 다름)임을
+    확인해 catalog notes에 기록했다. ADR-010 참조.
+- **검증**: 실제 서비스키로 obs_id=1890(파주 팔일봉) 라이브 호출 → 위도
+  37.78/경도 126.92/고도 242.0/서울특별시 인접 경기도로 정확히 채워짐 확인.
+  `pytest -q` 58 passed / live 11 passed·2 xfailed, `ruff check .`,
+  `mypy src/krforest` 통과.
+
+## [2026-09-09] 국립산림과학원 20-API 카탈로그 검토 — 청정넷(AICAN) 안전 데이터 2건 추가
+- **작업자**: Claude Sonnet 5 (Claude Code)
+- **내용**:
+  - 자매 프로젝트(`korea-cli`)가 추적하는 `산림청 국립산림과학원` 20개 API 카탈로그를
+    검토했다. 각 data.go.kr 상세 페이지에 첨부된 `.docx` 활용가이드를 직접
+    다운로드·파싱해 실제 request/response 필드와 신청 가능 트래픽(개발계정
+    1,000회/일)을 확인했다.
+  - `forest_dust_measurements`(15078005, 청정넷_측정데이터)와
+    `forest_dust_stations`(15078013, 청정넷_운영현황 attribute query)를 safety
+    endpoint로 추가했다. `ForestDustMeasurement`/`ForestDustStation` 모델과
+    parser, `client.safety.dust_measurements()`/`dust_stations()`를 구현했다.
+  - 나머지 16개(생물 표본·임업경제·도서관/연구 12건 + 청정넷 WMS/WFS GIS 레이어
+    4건)는 기존 travel/safety 범위 밖으로 판단해 `docs/forest-api.md`
+    Exclusions에 사유와 함께 기록했다. ADR-009 참조.
+  - AICAN 계열 API가 `response.header/body`로 감싸지 않고 `resultCode`/`items`를
+    JSON 최상위에 바로 반환하는 것을 라이브 호출로 확인해, `_http._normalize_payload`에
+    flat envelope 지원을 추가했다. 같은 API가 `contentType=JSON`(대문자)만
+    JSON으로 응답하고 소문자는 무시하는 것도 확인해 `ApiEndpoint.response_type_value`
+    override 필드를 추가했다.
+  - 라이브 검증 중 `parser.parse_datetime`이 구분자 없는 12자리 `yyyyMMddHHmm`
+    문자열에서 `strptime("%Y%m%d%H%M%S")`가 자릿수를 잘못 역추적해 분(minute) 값을
+    훼손하는 기존 버그를 발견해 수정했다(예: `"202511011530"` → 이전 `15:03`, 이제
+    `15:30`). 숫자 전용 문자열은 길이(8/10/12/14)로 형식을 고정한다. 이 버그는
+    `mountain_weather`/`wildfire_risk_forecast` 등 기존 endpoint에도 영향을
+    미치고 있었다.
+  - **적대적 리뷰(전문 리뷰어 서브에이전트 2명, 서로 독립적으로 다른 관점에서 진행)**:
+    한 명은 정확성(필드 매핑, envelope edge case, `parse_datetime` 견고성)을, 다른
+    한 명은 API 설계 일관성·`SKILL.md` 규칙 준수·문서 정합성을 검토했다. 두 리뷰
+    모두 실제 코드를 읽고 `pytest`/`ruff`/`mypy`를 직접 실행해 검증했다. 리뷰가 낸
+    항목 중 재현 가능한 주장(예: XML fallback이 조용히 데이터를 잃는다는 주장)은
+    직접 라이브 호출·인터프리터로 재검증한 뒤 반영 여부를 결정했다 — 해당 주장은
+    실제 vendor XML 루트 태그(`ResponseBaseDTO`)가 아니라 다른 endpoint의 root
+    태그(`response`)를 가정한 것으로 확인되어 반영하지 않았다. 실제로 반영한
+    수정:
+    - `parse_datetime`이 `fromisoformat`도 우회하도록 재구성. 11/13/15자리처럼
+      애매한 길이의 숫자열에서 `fromisoformat`이 구분자를 잘못 추정해 같은 종류의
+      오류(예: `"20260820123"` → `23:00`)를 낼 수 있음을 리뷰가 지적해 검증 후
+      수정 — 숫자 전용 입력은 이제 `fromisoformat`을 거치지 않는다.
+    - `model_number` 필드가 pydantic `protected_namespaces=('model_',)` 기본값과
+      충돌해 `pydantic>=2.7`(이 프로젝트가 허용하는 최소 버전)에서 import 시
+      `UserWarning`을 낼 수 있음을 발견해 `equipment_reference_number`로 이름을
+      바꿨다.
+    - `obsrr_tpcd`가 관측소 분류가 아니라 사실상 고유 식별 코드(측정데이터·관측소
+      속성 간 join key)로 기능함을 지적받아 `station_type_code`를 `station_code`로
+      변경.
+    - `obsrr_instl_dt`(날짜만 제공)를 `datetime`으로 만들면 timezone 변환 시
+      날짜가 밀릴 수 있다는 지적에 따라 `installed_at`을 `str | None`으로 변경.
+    - `address` 추출을 다른 parser 함수들과 일관되게 `_convert.extract_address`로
+      변경.
+    - live 테스트의 키 유출 검증이 `"serviceKey"`(소문자)를 확인해 실제로는
+      `"ServiceKey"`(기본값)를 쓰는 이 두 endpoint에서 항상 통과하던 오류를
+      수정(다른 lowercase override endpoint의 테스트를 잘못 복사한 것).
+    - flat envelope의 에러(`resultCode="22"`→rate limit)·no-data(`"03"`)·미인식
+      envelope(`ForestParseError`) 경로와, `mountain_weather`/
+      `wildfire_risk_forecast`의 12자리 타임스탬프 회귀(비대칭 분(minute) 값)에
+      대한 단위 테스트를 추가.
+    - `catalog.py`의 새 entry 2건을 `API_ENDPOINTS` 튜플 끝(다른 wildfire entry와
+      떨어져 있던 것을 정리)으로 옮겨 `docs/forest-api.md` 표 순서와 일치시킴.
+    - ADR-009/`docs/resume.md`의 수치 불일치(측정데이터에 없는 `obsrr_group_cd`
+      언급, "나머지 15개"→"12개", "생물표본 12건"→"생물표본·임업경제·도서관/연구
+      12건") 정정.
+- **검증**: 실제 서비스키로 `client.safety.dust_measurements()` 라이브 호출 성공
+  (총 30,286,187건 확인), `dust_stations()`는 활용신청 미승인으로 auth xfail(기존
+  패턴과 동일). 리뷰 반영 후 `pytest -q` 52 passed / live 11 passed, 2 xfailed,
+  `ruff check .`, `mypy src/krforest` 통과.
+
 ## [2026-08-20] C05B~C05D 리뷰 반영 및 경계 보안 보강
 - **작업자**: Codex
 - **내용**:

@@ -3,9 +3,9 @@
 import pytest
 
 from krforest import ForestAuthError, Page
-from krforest.exceptions import ForestNoDataError
+from krforest.exceptions import ForestNoDataError, ForestParseError, ForestRateLimitError
 
-from .conftest import FakeResponse, public_payload, xml_payload
+from .conftest import FakeResponse, flat_payload, public_payload, xml_payload
 
 KOREA_2000_UNIFIED_WKT = (
     'PROJCS["Korea_2000_Unified_CS",GEOGCS["GCS_Korea 2000",'
@@ -171,10 +171,10 @@ async def test_data_go_json_endpoint_adds_type_and_parses_items(fake_client_fact
             {
                 "doname": "전국",
                 "meanavg": "27",
-                "analdate": "202608201200",
+                "analdate": "202608201245",
                 "regioncode": "00",
             },
-            {"doname": "서울", "meanavg": "22", "analdate": "202608201200"},
+            {"doname": "서울", "meanavg": "22", "analdate": "202608201245"},
         ],
         total_count=2,
     )
@@ -190,6 +190,10 @@ async def test_data_go_json_endpoint_adds_type_and_parses_items(fake_client_fact
     assert page.items[1].mean_average == 22.0
     assert page.items[0].analysis_at is not None
     assert page.items[0].analysis_at.utcoffset() is not None
+    # 회귀 방지: yyyyMMddHHmm(초 없음)이 %H%M%S로 잘못 역추적되어 분(minute)이
+    # 깨지지 않는다("202608201245" -> 12:04로 오파싱되던 버그).
+    assert page.items[0].analysis_at.hour == 12
+    assert page.items[0].analysis_at.minute == 45
     assert page.context.provider == "data.go.kr"
     assert "ServiceKey" not in page.context.request_params
 
@@ -301,13 +305,31 @@ async def test_client_catalog_returns_human_readable_entries(fake_client_factory
     )
 
 
+def test_mountain_weather_stations_is_local_and_sync(fake_client_factory):
+    # 원격 호출이 아니라 로컬 정적 데이터라 세션이 전혀 쓰이지 않아야 한다.
+    client, session = fake_client_factory()
+
+    stations = client.travel.mountain_weather_stations()
+
+    assert len(stations) == 454
+    assert session.calls == []
+    gwanaksan = next(s for s in stations if s.obs_id == "1917")
+    assert gwanaksan.region_name == "서울특별시"
+    assert gwanaksan.mountain_name == "서울 관악산"
+    assert (gwanaksan.latitude, gwanaksan.longitude, gwanaksan.elevation) == (
+        37.45,
+        126.93,
+        382.0,
+    )
+
+
 async def test_mountain_weather_returns_place_coordinate(fake_client_factory):
     payload = public_payload(
         {
             "obsid": "OBS-01",
             "obsname": "관악산",
             "localarea": "서울",
-            "tm": "202608201200",
+            "tm": "202608201245",
             "tm10m": "25.1",
             "tm2m": "24.3",
             "hm10m": "70",
@@ -337,7 +359,120 @@ async def test_mountain_weather_returns_place_coordinate(fake_client_factory):
     assert page.items[0].temperature_2m == 24.3
     assert page.items[0].observed_at is not None
     assert page.items[0].observed_at.utcoffset() is not None
+    # 회귀 방지: yyyyMMddHHmm(초 없음)이 %H%M%S로 잘못 역추적되어 분(minute)이
+    # 깨지지 않는다.
+    assert page.items[0].observed_at.hour == 12
+    assert page.items[0].observed_at.minute == 45
     assert page.items[0].raw["obsname"] == "관악산"
+
+
+async def test_mountain_weather_enriches_coordinates_from_static_station_table(
+    fake_client_factory,
+):
+    # 실제 mountListSearch 응답에는 좌표·고도·지역명 필드가 전혀 없다(벤더 기술문서
+    # 확인). obsid=1917은 "서울 관악산"의 실제 지점번호다.
+    payload = public_payload(
+        {
+            "obsid": "1917",
+            "obsname": "서울 관악산",
+            "localarea": 1,
+            "tm": "-",
+            "tm10m": "-",
+            "tm2m": "-",
+            "hm10m": "-",
+            "hm2m": "-",
+            "pa": "-",
+            "rn": "-",
+            "cprn": "-",
+            "ts": "-",
+            "wd10m": "-",
+            "wd10mstr": "-",
+            "wd2m": "-",
+            "wd2mstr": "-",
+            "ws10m": "-",
+            "ws2m": "-",
+        },
+        total_count=1,
+    )
+    client, _session = fake_client_factory(FakeResponse(payload))
+
+    page = await client.travel.mountain_weather(num_of_rows=1)
+
+    item = page.items[0]
+    assert item.latitude == 37.45
+    assert item.longitude == 126.93
+    assert item.elevation == 382.0
+    assert item.region_name == "서울특별시"
+    # 결측 sentinel "-"는 숫자 필드뿐 아니라 방위 문자열 필드에서도 None이어야 한다.
+    assert item.temperature_10m is None
+    assert item.observed_at is None
+    assert item.wind_direction_10m_name is None
+    assert item.wind_direction_2m_name is None
+
+
+async def test_mountain_weather_unknown_station_leaves_enrichment_none(fake_client_factory):
+    payload = public_payload(
+        {"obsid": "999999999", "obsname": "미등록관측소"},
+        total_count=1,
+    )
+    client, _session = fake_client_factory(FakeResponse(payload))
+
+    page = await client.travel.mountain_weather(num_of_rows=1)
+
+    item = page.items[0]
+    assert item.latitude is None
+    assert item.longitude is None
+    assert item.elevation is None
+    assert item.region_name is None
+    assert item.obs_name == "미등록관측소"
+
+
+async def test_mountain_weather_maps_local_area_obs_id_and_observation_time_filters(
+    fake_client_factory,
+):
+    client, session = fake_client_factory(FakeResponse(public_payload([])))
+
+    await client.travel.mountain_weather(
+        local_area="09", obs_id="1917", observation_time="202106301809", num_of_rows=1
+    )
+
+    params = session.calls[0]["params"]
+    assert params["localArea"] == "09"
+    assert params["obsid"] == "1917"
+    assert params["tm"] == "202106301809"
+
+
+async def test_mountain_weather_still_accepts_raw_wire_param_names_via_kwargs(
+    fake_client_factory,
+):
+    # 회귀 방지: local_area/obs_id/observation_time named kwarg를 추가하기 전에는
+    # **params로 벤더 원본 이름(localArea/obsid/tm)을 직접 전달하는 것이 유일한
+    # 방법이었다. named kwarg가 기본값 None으로 이 값을 덮어써서 조용히 사라지면
+    # 안 된다.
+    client, session = fake_client_factory(FakeResponse(public_payload([])))
+
+    await client.travel.mountain_weather(
+        localArea="09", obsid="1917", tm="202106301809", num_of_rows=1
+    )
+
+    params = session.calls[0]["params"]
+    assert params["localArea"] == "09"
+    assert params["obsid"] == "1917"
+    assert params["tm"] == "202106301809"
+
+
+async def test_dust_measurements_still_accepts_raw_wire_param_names_via_kwargs(
+    fake_client_factory,
+):
+    client, session = fake_client_factory(FakeResponse(flat_payload([])))
+
+    await client.safety.dust_measurements(
+        startDt="202009180000", endDt="202009190000", num_of_rows=1
+    )
+
+    params = session.calls[0]["params"]
+    assert params["startDt"] == "202009180000"
+    assert params["endDt"] == "202009190000"
 
 
 async def test_landslide_forecast_issues_are_typed(fake_client_factory):
@@ -388,6 +523,153 @@ async def test_erosion_control_dams_returns_place_coordinate(fake_client_factory
     assert page.items[0].latitude == 37.2
     assert page.items[0].longitude == 127.1
     assert page.items[0].raw["name"] == "테스트사방댐"
+
+
+async def test_dust_measurements_parses_flat_envelope_and_uppercase_content_type(
+    fake_client_factory,
+):
+    payload = flat_payload(
+        [
+            {
+                "obsrt_dtm": "202511011530",
+                "obsrt_tmprt": 18.055,
+                "obsrt_hmdt": 89.069,
+                "obsrt_wndrc_val": 186.431,
+                "obsrt_ws": 0.249,
+                "obsrt_pm10_val": 17.475,
+                "obsrt_pm25_val": 11.652,
+                "obsrt_pm01_val": 6.318,
+                "avoc_obsrt_pm10_val": 13.618,
+                "avoc_obsrt_pm25_val": 9.078,
+                "avoc_obsrt_pm01_val": 4.042,
+                "obsrr_tpcd": "0021",
+            }
+        ],
+        total_count=1863,
+    )
+    client, session = fake_client_factory(FakeResponse(payload))
+
+    page = await client.safety.dust_measurements(
+        start_date="202009180000", end_date="202009190000", num_of_rows=1
+    )
+
+    call = session.calls[0]
+    assert call["url"].endswith("/AicanDustData/dustData")
+    assert call["params"]["contentType"] == "JSON"
+    assert "_type" not in call["params"]
+    assert call["params"]["startDt"] == "202009180000"
+    assert call["params"]["endDt"] == "202009190000"
+    item = page.items[0]
+    assert item.station_code == "0021"
+    assert item.pm10 == 17.475
+    assert item.pm25 == 11.652
+    assert item.temperature == 18.055
+    # 회귀 방지: yyyyMMddHHmm이 %H%M%S로 잘못 역추적되어 분(minute)이 깨지지 않는다.
+    assert item.observed_at is not None
+    assert item.observed_at.hour == 15
+    assert item.observed_at.minute == 30
+    assert page.total_count == 1863
+
+
+async def test_dust_measurements_flat_error_envelope_maps_to_rate_limit(fake_client_factory):
+    payload = flat_payload([], result_code="22", result_msg="TRAFFIC_OVER_ERR")
+    client, _session = fake_client_factory(FakeResponse(payload))
+
+    with pytest.raises(ForestRateLimitError):
+        await client.safety.dust_measurements(num_of_rows=1)
+
+
+async def test_dust_measurements_flat_no_data_returns_empty_page(fake_client_factory):
+    payload = flat_payload([], result_code="03", result_msg="NO_DATA_ERR")
+    client, _session = fake_client_factory(FakeResponse(payload))
+
+    page = await client.safety.dust_measurements(num_of_rows=1)
+
+    assert page.is_empty
+    assert page.total_count == 0
+
+
+async def test_dust_measurements_unrecognized_envelope_raises_parse_error(
+    fake_client_factory,
+):
+    client, _session = fake_client_factory(FakeResponse({"unexpected": "shape"}))
+
+    with pytest.raises(ForestParseError):
+        await client.safety.dust_measurements(num_of_rows=1)
+
+
+async def test_dust_measurements_parses_vendor_xml_root_tag_flat_envelope(
+    fake_client_factory,
+):
+    # 청정넷(AICAN) XML은 <response>가 아니라 <ResponseBaseDTO>를 root tag로 쓴다
+    # (예: contentType을 명시적으로 xml로 요청했을 때). resultCode가 root tag
+    # 바로 아래에 오는 것도 flat envelope로 인식해야 한다.
+    xml = (
+        "<ResponseBaseDTO><resultCode>00</resultCode><resultMsg>OK</resultMsg>"
+        "<numOfRows>1</numOfRows><pageNo>1</pageNo><totalCount>1</totalCount>"
+        "<items><obsrt_dtm>201908252220</obsrt_dtm><obsrt_pm10_val>3.648</obsrt_pm10_val>"
+        "</items></ResponseBaseDTO>"
+    )
+    client, _session = fake_client_factory(FakeResponse(text=xml))
+
+    page = await client.raw_endpoint("forest_dust_measurements", {}, response_format="xml")
+
+    assert page.items[0]["obsrt_pm10_val"] == "3.648"
+    assert page.total_count == 1
+
+
+async def test_dust_measurements_xml_error_without_result_msg_does_not_leak_none(
+    fake_client_factory,
+):
+    xml = "<ResponseBaseDTO><resultCode>30</resultCode></ResponseBaseDTO>"
+    client, _session = fake_client_factory(FakeResponse(text=xml))
+
+    with pytest.raises(ForestAuthError) as exc_info:
+        await client.raw_endpoint("forest_dust_measurements", {}, response_format="xml")
+
+    assert "None" not in str(exc_info.value)
+
+
+async def test_dust_stations_parses_flat_envelope_and_coordinates(fake_client_factory):
+    payload = flat_payload(
+        [
+            {
+                "obsrr_nm": "고매_150m",
+                "obsrr_lngtd": "127.1019270000",
+                "obsrr_lttd": "37.2196650000",
+                "obsrr_instl_dt": "20191114",
+                "obsrr_tpcd": "0023",
+                "obsrr_group_cd": "002",
+                "eqpmn_nm": "EDM365",
+                "eqpmn_model_nm": "EDM365-SVC",
+                "eqpmn_mkr_nm": "GRIMM(독일)",
+                "obsrr_haslv": "49.0",
+                "obsrr_dscrt": "상층이 백합나무 숲인 내부",
+                "obsrr_addr": "경기 용인시 기흥구 고매동 486-1 고매시험림",
+                "obsrr_mdm_no": "012-2476-1177",
+            }
+        ]
+    )
+    client, session = fake_client_factory(FakeResponse(payload))
+
+    page = await client.safety.dust_stations(num_of_rows=1)
+
+    call = session.calls[0]
+    assert call["url"].endswith("/AicanObsrrInfo/obsrrInfo")
+    assert call["params"]["contentType"] == "JSON"
+    assert "_type" not in call["params"]
+    item = page.items[0]
+    assert item.station_name == "고매_150m"
+    assert item.latitude == 37.219665
+    assert item.longitude == 127.101927
+    assert item.station_code == "0023"
+    assert item.station_group_code == "002"
+    assert item.equipment_maker == "GRIMM(독일)"
+    assert item.equipment_reference_number == "012-2476-1177"
+    assert item.address == "경기 용인시 기흥구 고매동 486-1 고매시험림"
+    # obsrr_instl_dt는 yyyyMMdd(날짜만)라 시간대 변환 시 날짜가 밀리지 않도록
+    # datetime이 아닌 원본 문자열로 노출한다.
+    assert item.installed_at == "20191114"
 
 
 async def test_recreation_forest_reservations_uses_lowercase_service_key(fake_client_factory):

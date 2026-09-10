@@ -37,6 +37,8 @@ outdoor recreation, wildfire, landslide, and forest safety data.
 | `landslide_forecast_issues` | safety | data.go.kr | 15074798 | `1400000/forecastIssueService/forecastIssueList` |
 | `roadside_landslides` | safety | data.go.kr | 15074812 | `1400000/roadsideLndslInfoService/roadsideLndslInfoList` |
 | `erosion_control_dams` | safety | data.go.kr | 15074803 | `1400000/ecndmInfoService/ecndmInfoList` |
+| `forest_dust_measurements` | safety | data.go.kr | 15078005 | `1400377/AicanDustData/dustData` |
+| `forest_dust_stations` | safety | data.go.kr | 15078013 | `1400377/AicanObsrrInfo/obsrrInfo` |
 
 Notes:
 
@@ -56,7 +58,45 @@ Notes:
 - `client.travel.mountain_weather()` returns `MountainWeather` typed observations.
   The model exposes station identity, KST-aware observation time, 10 m/2 m
   temperature-humidity-wind fields, pressure and rainfall fields, while raw
-  provider keys remain in `raw`.
+  provider keys remain in `raw`. Accepts `local_area` (지역코드 01~17), `obs_id`
+  (지점번호), and `observation_time` (정확한 관측시간 `yyyyMMddHHmm`, not to be
+  confused with the parsed `datetime` in `MountainWeather.observed_at`) as
+  optional filters, mapped to the vendor's `localArea`/`obsid`/`tm` params.
+  개발계정 신청 가능 트래픽은 10,000회/일이다(청정넷/AICAN 계열의 1,000회/일과
+  다르다). **Note:** the vendor's `obsid` filter itself is broken — a live call
+  returns `totalCount=1` with an empty `items` list — so don't rely on it to
+  fetch a single known station; filter client-side instead.
+  - **The live `mountListSearch` response never includes coordinates, elevation,
+    or a region name** — confirmed both from the vendor's technical document
+    (`03_산악기상정보_기술문서_v1.5(수정본).docx`, response field table) and by a
+    real API call. `latitude`/`longitude`/`elevation`/`region_name` are instead
+    looked up by `obs_id` from a 454-entry static table (transcribed from that
+    document's "지점 상세 코드" appendix) — `obs_name` is NOT enriched this way
+    and is always the response's own value. If the response ever does carry
+    coordinate fields directly (future provider change), those take priority
+    over the static table. An unknown `obs_id` leaves these four fields `None`
+    rather than raising.
+  - `client.travel.mountain_weather_stations()` returns that same 454-station
+    static table directly as `MountainStation` records (`obs_id`, `region_name`,
+    `mountain_name`, `latitude`, `longitude`, `elevation`, all required —
+    unlike `MountainWeather`'s optional versions of the same four fields). It's
+    a **synchronous, local-only** method (no HTTP call, matching
+    `client.catalog()`/`client.endpoints()`), sorted by `obs_id` ascending, and
+    is the supported way to enumerate or join against the reference data instead
+    of importing the internal `_mountain_stations` module.
+  - **Coverage gap:** the live API currently returns roughly 513 stations, but
+    the static table has only 454 rows (~88% coverage) — the vendor's technical
+    document appendix is itself a snapshot and lags the live registry. Don't
+    assume every returned row gets coordinates; check `latitude is not None`
+    per item.
+  - The live response uses the literal string `"-"` as its missing-value
+    sentinel for every dynamic field (temperature, humidity, wind, rainfall,
+    pressure, observation time) — confirmed live: at the time of this review,
+    *every* one of the ~513 stations returned `"-"` for all of them. Numeric
+    fields already become `None` as a side effect of `float("-")` raising
+    `ValueError`; `wind_direction_10m_name`/`wind_direction_2m_name` (string
+    compass-direction fields) needed an explicit `_none_if_dash` check in
+    `parser.py` since they have no such numeric conversion to fall back on.
 - `client.safety.wildfire_risk_forecast()`, `_sido()`, and `_sigungu()` use the
   official `forestPointV2` endpoints and return `WildfireRiskForecast` typed
   rows. `localAreas` and `upplocalcd` are passed only to the corresponding
@@ -90,6 +130,38 @@ Notes:
 - `client.safety.landslide_risk_map_files()` downloads the forest.go.kr
   산사태위험지도 ZIP and returns a filename-keyed `dict[str, bytes]` because the
   dataset is raster TIF/XML/PDF rather than record-shaped vector data.
+- `client.safety.dust_measurements()` and `client.safety.dust_stations()` wrap
+  국립산림과학원_청정넷(AICAN, 산림 미세먼지 측정넷) and return `ForestDustMeasurement`
+  / `ForestDustStation` typed rows. Both models expose `station_code` (from
+  `obsrr_tpcd`) as the join key between a measurement row and its station —
+  `obsrr_group_cd` (site grouping such as 홍릉/고매/시화/양재/관악/제주) only exists
+  on the station side. `ForestDustStation.installed_at` stays a plain `yyyyMMdd`
+  string (not `datetime`) because the vendor only provides day precision; a
+  KST-midnight `datetime` would shift a day when a consumer converts to another
+  timezone. Both endpoints return a *flat* envelope (`resultCode`/`resultMsg`/
+  `items` at the JSON root, no `response.header/body` wrapper). This vendor's
+  XML also lacks the usual `<response>` root tag — it uses `<ResponseBaseDTO>`
+  with `resultCode` directly underneath — so `_http._normalize_payload`
+  recognizes a flat envelope under *either* encoding: `resultCode` at the JSON
+  root, or one level under any single XML root tag. This matters if a caller
+  explicitly requests `response_format="xml"` (e.g. via the Streamlit debug
+  UI's format dropdown) for these two endpoints. Both endpoints also require
+  the literal
+  uppercase `contentType=JSON` — lowercase `json` silently falls back to XML —
+  so `ApiEndpoint.response_type_value` was added to override the default
+  lowercase `"json"` value per endpoint. 개발계정 신청 가능 트래픽은 두 endpoint
+  모두 1,000회/일이며, 운영계정은 활용사례 등록 후 증설 신청이 가능하다(2026-09-09
+  data.go.kr 상세 페이지 확인). `dust_stations()`는 같은 API의 지도 조회 기능인
+  `obsrrInfoWms`(WMS 이미지)와 `obsrrInfoWFS`(GML feature)는 구현하지 않고, JSON
+  속성 조회(`obsrrInfo`)만 구현한다 — 이 라이브러리는 이미지/GML을 다루지 않는다.
+- `parse_datetime`이 구분자 없는 숫자열(`yyyyMMddHHmm` 등)에서 `strptime`의
+  `%Y%m%d%H%M%S` 형식이 자릿수를 잘못 역추적해 분(minute) 값을 훼손하던 버그를
+  고쳤다(예: `"202511011530"` → 이전에는 `15:03`, 이제 `15:30`). 숫자 전용
+  문자열은 이제 `datetime.fromisoformat`을 거치지 않고 길이(8/10/12/14자리)로만
+  형식을 고정해서 파싱한다 — `fromisoformat`도 11/13/15자리 같은 애매한 길이의
+  숫자열에서는 구분자를 잘못 추정해 같은 종류의 오류를 낼 수 있기 때문이다. 이
+  버그는 `mountain_weather`, `wildfire_risk_forecast` 등 12자리 타임스탬프를 쓰는
+  기존 endpoint에도 영향을 미쳤었다.
 
 ## Implemented File Datasets
 
@@ -145,3 +217,39 @@ Excluded examples include pure biology/specimen catalogs, forestry economics,
 legal interpretation, business registration, and local-government datasets that
 only mention 산림청 in their descriptions. The GPX 100대명산 file dataset is
 included because it directly supports hiking/travel use.
+
+### 2026-09-09 국립산림과학원 20-API catalog review
+
+A sibling project's API-coverage catalog (`산림청 국립산림과학원`, 20 datasets across
+data.go.kr ids `15078005`–`15156604`, not a contiguous range) was reviewed
+against this scope. Only 4 of the 20 datasets fit travel/safety and are
+implemented, as 6 endpoints: `mountain_weather` and the 3
+`wildfire_risk_forecast*` endpoints (already present, 1 dataset id) plus the 2
+new `forest_dust_measurements`/`forest_dust_stations` endpoints added in this
+review (청정넷/AICAN 산림 미세먼지 실측 데이터, air quality is actionable safety
+information for anyone deciding whether to go outdoors). The remaining 16
+datasets were evaluated and intentionally excluded:
+
+| data.go.kr id | 이름 | 제외 사유 |
+| --- | --- | --- |
+| 15084717 | 산림생명자원 | 표본·종자·보존림 생물 카탈로그 (specimen catalog) |
+| 15083722 | 산림생장정보 | 입목재적·임분수확표 (forestry biomass/economics reference tables) |
+| 15083744 | 임업기술핸드북 | 임업 기술 참고문헌 (reference handbook, not travel/safety data) |
+| 15084708 | 산림연구 과제 및 성과 정보 | 연구과제·논문·특허 정보 (research/academic) |
+| 15083696 | 임업경제동향 | 원목 가격 동향 (forestry economics) |
+| 15084808 | 산림과학도서관 | 도서관 소장자료 검색 (library catalog) |
+| 15083709 | 목재류 비관세장벽 현황정보 | 목재 소비·GDP 통계 (forestry economics) |
+| 15156601 | 주요수종목재도감 상세 | 수종·목재 도감 (specimen/reference catalog) |
+| 15156597 | 절지동물분포조사자료 | 절지동물 분포조사 (biology/specimen survey) |
+| 15156594 | 식물정유은행 | 식물 정유 성분 데이터 (biology/specimen catalog) |
+| 15156592 | 대나무자원정보 | 대나무 표준지 조사자료 (biology/resource survey) |
+| 15156604 | 한국임목종자도감 | 임목종자 형질 도감 (specimen/reference catalog) |
+| 15078022 | 청정넷_그린인프라 | 도시조사지역·임목·표본점 WMS/WFS 공간 레이어. 홍릉·고매·시화·양재·관악·제주 6개 연구 대상지에 한정된 도시숲 연구용 GIS 레이어이며, 실측값이 아니라 정적 분류 레이어라 여행자에게 실행 가능한 정보를 주지 않는다 |
+| 15078027 | 청정넷_그레이인프라 | 나지·다리·건물·하천·도로 WMS/WFS 레이어. 위와 동일한 사유(연구 대상지 한정, 정적 인프라 분류) |
+| 15078028 | 청정넷_사용자가치 | 토지피복·인구밀도·교통속도 가중치 WMS/WFS 레이어. 위와 동일한 사유 |
+| 15080323 | 청정넷_유관기관 변환자료 | 2020년 4개 지점(홍릉·고매·시화·양재)의 DEM·유동인구·교통량 연구 데이터. 여행자용 실시간 정보가 아닌 과거 연구 맥락 데이터 |
+
+`forest_dust_stations`가 구현하는 `AicanObsrrInfo` API 자체는 속성 조회
+(`obsrrInfo`) 외에 WMS(`obsrrInfoWms`)와 WFS(`obsrrInfoWFS`) 지도 조회 기능도
+제공하지만, 이미지·GML 응답은 이 라이브러리의 typed-JSON 모델 구조와 맞지 않아
+구현하지 않았다(위 4개 청정넷 GIS API를 제외한 사유와 동일).

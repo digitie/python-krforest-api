@@ -9,7 +9,7 @@ Korea Forest Service(산림청)와 `data.go.kr`이 공개하는 데이터를 여
 이 package는 생물학, 연구, 임업 사업, 관련 없는 행정 dataset을 넓게 감싸지 않는다. 현재 scope는 다음과 같다.
 
 - 여행: 숲길, 둘레길, 백두대간 trail, 유명산, 산악기상, 숲나들e 예약 API, 국립자연휴양림 standard data, 휴양림 상세, forest.go.kr SHP 공간 dataset
-- 안전: 산불 위험/통계, 산사태 예측/이력, 사방댐, 산악기상, 안전 file dataset
+- 안전: 산불 위험/통계, 산사태 예측/이력, 사방댐, 산악기상, 청정넷(AICAN) 산림 미세먼지 측정, 안전 file dataset
 
 ## 현재 상태
 
@@ -105,6 +105,11 @@ weather = await client.travel.mountain_weather(num_of_rows=1)
 lat: float | None = weather.items[0].latitude
 lon: float | None = weather.items[0].longitude
 
+# mountListSearch 응답 자체에는 좌표가 없다 — 위 latitude/longitude는 아래
+# 정적 참조 테이블(로컬 데이터, 원격 호출 없음)에서 obs_id로 채운 값이다.
+stations = client.travel.mountain_weather_stations()
+gwanaksan = next(s for s in stations if s.obs_id == "1917")
+
 forests = await client.travel.recreation_forests(name="덕유산")
 address: str | None = forests[0].address
 forest_lat: float | None = forests[0].latitude
@@ -116,6 +121,11 @@ village_forests = await client.travel.traditional_village_forests()
 huyang_points = await client.travel.recreation_forest_arboretums()
 dulle_features = await client.travel.dulle_trail_features()
 landslide_files = await client.safety.landslide_risk_map_files()
+
+dust = await client.safety.dust_measurements(num_of_rows=1)
+pm10: float | None = dust.items[0].pm10
+dust_stations = await client.safety.dust_stations(num_of_rows=1)
+station_lat: float | None = dust_stations.items[0].latitude
 ```
 
 ## File dataset
