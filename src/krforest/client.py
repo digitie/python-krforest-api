@@ -15,7 +15,9 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from ._http import AsyncSessionLike, ForestHttp, ResponseLike
+from ._httpx import send_after_token
 from ._mountain_stations import mountain_stations
+from ._ratelimit import AsyncTokenBucket
 from .catalog import (
     FOREST_GO_FILE_DOWNLOAD_HISTORY_URL,
     FOREST_GO_FILE_DOWNLOAD_POPUP_URL,
@@ -856,6 +858,7 @@ class FileDataNamespace:
             self._client._http.session,
             dataset.detail_url,
             timeout=self._client.timeout,
+            rate_limiter=self._client._http._rate_limiter,
         )
         if int(response.status_code) in {401, 403}:
             raise ForestAuthError(
@@ -884,6 +887,7 @@ class FileDataNamespace:
                 self._client._http.session,
                 dataset,
                 timeout=self._client.timeout,
+                rate_limiter=self._client._http._rate_limiter,
             )
         url = await self.download_url(data_go_id)
         return await self._client._http.get_bytes(
@@ -979,6 +983,7 @@ async def _submit_forest_go_download_history(
     dataset: FileDataset,
     *,
     timeout: float,
+    rate_limiter: AsyncTokenBucket,
 ) -> None:
     if dataset.download_path is None or dataset.source_path is None:
         return
@@ -993,13 +998,17 @@ async def _submit_forest_go_download_history(
         "url": dataset.source_path,
     }
     popup = await _forest_go_request_with_retry(
-        lambda: session.get(
+        lambda: _send_file_request(
+            session,
+            "GET",
             FOREST_GO_FILE_DOWNLOAD_POPUP_URL,
+            rate_limiter=rate_limiter,
             params=popup_params,
             timeout=timeout,
         ),
         dataset=dataset,
         endpoint=FOREST_GO_FILE_DOWNLOAD_POPUP_URL,
+        rate_limiter=rate_limiter,
     )
     if int(popup.status_code) >= 400:
         raise ForestRequestError(
@@ -1023,14 +1032,18 @@ async def _submit_forest_go_download_history(
         "useAgree01": "Y",
     }
     response = await _forest_go_request_with_retry(
-        lambda: session.post(
+        lambda: _send_file_request(
+            session,
+            "POST",
             FOREST_GO_FILE_DOWNLOAD_HISTORY_URL,
+            rate_limiter=rate_limiter,
             data=history_data,
             timeout=timeout,
             follow_redirects=False,
         ),
         dataset=dataset,
         endpoint=FOREST_GO_FILE_DOWNLOAD_HISTORY_URL,
+        rate_limiter=rate_limiter,
         attempts=1,
     )
     if int(response.status_code) >= 400:
@@ -1052,11 +1065,13 @@ async def _forest_go_request_with_retry(
     *,
     dataset: FileDataset,
     endpoint: str,
+    rate_limiter: AsyncTokenBucket,
     attempts: int = 3,
     backoff: float = 0.5,
 ) -> ResponseLike:
     last_exc: httpx.HTTPError | None = None
     for attempt in range(attempts):
+        await rate_limiter.acquire()
         try:
             return await request()
         except httpx.HTTPError as exc:  # pragma: no cover - network-dependent
@@ -1121,9 +1136,13 @@ async def _get_detail_page(
     url: str,
     *,
     timeout: float,
+    rate_limiter: AsyncTokenBucket,
 ) -> ResponseLike:
+    await rate_limiter.acquire()
     try:
-        return await session.get(url, timeout=timeout)
+        return await _send_file_request(
+            session, "GET", url, timeout=timeout, rate_limiter=rate_limiter
+        )
     except Exception as exc:
         raise ForestRequestError(
             f"failed to fetch data.go.kr file detail page: {exc}",
@@ -1131,6 +1150,26 @@ async def _get_detail_page(
             endpoint=url,
             failure_kind="network",
         ) from exc
+
+
+async def _send_file_request(
+    session: AsyncSessionLike,
+    method: str,
+    url: str,
+    *,
+    rate_limiter: AsyncTokenBucket,
+    **kwargs: Any,
+) -> ResponseLike:
+    """첫 토큰을 확보한 파일 보조 요청을 redirect 과금과 함께 전송한다."""
+    if isinstance(session, httpx.AsyncClient):
+        follow_redirects = kwargs.pop("follow_redirects", None)
+        return await send_after_token(
+            session, session.build_request(method, url, **kwargs), rate_limiter,
+            follow_redirects=follow_redirects,
+        )
+    if method == "POST":
+        return await session.post(url, **kwargs)
+    return await session.get(url, **kwargs)
 
 
 def _walk_content_urls(value: Any) -> Iterator[str]:

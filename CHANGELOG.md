@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### TPS 제어 변경
+
+- 공통 `AsyncTokenBucket`으로 FIFO·취소·유한한 수치 검증·1 TPS 미만 설정을 지원한다.
+- 파일 상세 조회, forest.go.kr 팝업 GET·이력 POST·재시도와 최종 다운로드가 같은 버킷을 사용한다.
+- 사용법과 범위: `docs/async-tps.md`.
+
 `docs/tasks.md`에서 "0.2.0 파괴적 변경을 계기로 도입"으로 계획됐던 문서다. 과거 변경 이력은 `docs/journal.md`와 `docs/decisions.md`(ADR)에 이미 기록되어 있으므로 여기서는 소급 작성하지 않고, 이 시점 이후의 사용자 가시 변경만 기록한다.
 
 ### Added

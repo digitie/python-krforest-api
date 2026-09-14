@@ -2,6 +2,14 @@
 
 역시간순(최근 작업이 위로)으로 작업 사항을 기록합니다. 작업이 완료되면 이 문서에 기록을 추가하세요.
 
+## 2026-09-14 TPS 통합 검증 완료
+
+- 파일 상세 조회, forest.go.kr 팝업 GET·이력 POST·재시도와 최종 다운로드가 같은 버킷을 사용한다.
+- 공통 계약과 회귀 테스트는 `docs/async-tps.md`를 참고한다.
+- 오프라인 pytest 82 passed, ruff/mypy/compileall 통과. 독립 적대적 리뷰 2건의 수정 사항을 반영하고 승인받았다.
+- 실제 공급자 live E2E: 12 passed, 1 xfailed (1400000 safety API 사용 승인 부족). xfail은 성공 건수에 포함하지 않는다.
+- WSL에서 확인한 취소 테스트의 10ms 타이밍 의존성을 Event와 가짜 시계로 제거했고 8개 버킷 테스트가 통과했다.
+
 ## [2026-09-10] 산악기상 관측지점 정적 테이블을 공개 API로 승격
 - **작업자**: Claude Sonnet 5 (Claude Code)
 - **내용**: 리뷰에서 `MountainWeather` docstring이 export되지 않은 내부 모듈
