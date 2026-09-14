@@ -20,3 +20,5 @@
 - [x] (2026-05-24) `src/krforest` 전체 코드 리뷰 및 안전한 개선 반영 (죽은 코드 제거, 폴백 가독성, 지수 백오프, 타입 표기 단순화).
 - [x] 기본 테스트 및 CI 파이프라인 설정 (pytest/ruff/mypy strict).
 - [x] 문서 한글 작성 원칙 반영 (AGENTS.md / SKILL.md / docs/*).
+
+- [x] (2026-09-14) 공통 AsyncTokenBucket·전체 HTTP TPS 적용, 적대적 리뷰 2인 및 live E2E 검증.

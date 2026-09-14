@@ -18,6 +18,7 @@ from ._convert import (
     without_none,
     xml_to_dict,
 )
+from ._httpx import send_after_token
 from ._ratelimit import AsyncTokenBucket
 from .exceptions import (
     ForestAuthError,
@@ -92,10 +93,10 @@ class ForestHttp:
             raise ValueError("service_key_param must not be empty")
         self.api_key = api_key
         self.timeout = timeout
+        self._rate_limiter = AsyncTokenBucket(max_rps=max_rps)
         self.session = session or _new_session(timeout)
         self._owns_session = session is None
         self.service_key_param = service_key_param
-        self._rate_limiter = AsyncTokenBucket(max_rps=max_rps)
 
     async def aclose(self) -> None:
         """내부에서 만든 HTTP 세션을 닫는다."""
@@ -133,11 +134,18 @@ class ForestHttp:
         )
         await self._rate_limiter.acquire()
         try:
-            response = await self.session.get(
-                url,
-                params=without_none(query),
-                timeout=self.timeout,
-            )
+            if isinstance(self.session, httpx.AsyncClient):
+                response = await send_after_token(
+                    self.session,
+                    self.session.build_request(
+                        "GET", url, params=without_none(query), timeout=self.timeout
+                    ),
+                    self._rate_limiter,
+                )
+            else:
+                response = await self.session.get(
+                    url, params=without_none(query), timeout=self.timeout
+                )
         except httpx.HTTPError as exc:
             message = redact_secret(str(exc), self.api_key)
             raise ForestRequestError(
@@ -180,11 +188,17 @@ class ForestHttp:
     ) -> bytes:
         await self._rate_limiter.acquire()
         try:
-            response = await self.session.get(
-                url,
-                timeout=self.timeout,
-                follow_redirects=False,
-            )
+            if isinstance(self.session, httpx.AsyncClient):
+                response = await send_after_token(
+                    self.session,
+                    self.session.build_request("GET", url, timeout=self.timeout),
+                    self._rate_limiter,
+                    follow_redirects=False,
+                )
+            else:
+                response = await self.session.get(
+                    url, timeout=self.timeout, follow_redirects=False
+                )
         except httpx.HTTPError as exc:
             message = redact_secret(str(exc), self.api_key)
             raise ForestRequestError(
