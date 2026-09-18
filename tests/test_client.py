@@ -5,7 +5,13 @@ import pytest
 from krforest import ForestAuthError, Page
 from krforest.exceptions import ForestNoDataError, ForestParseError, ForestRateLimitError
 
-from .conftest import FakeResponse, flat_payload, public_payload, xml_payload
+from .conftest import (
+    FakeResponse,
+    flat_payload,
+    public_payload,
+    standard_data_payload,
+    xml_payload,
+)
 
 KOREA_2000_UNIFIED_WKT = (
     'PROJCS["Korea_2000_Unified_CS",GEOGCS["GCS_Korea 2000",'
@@ -231,6 +237,56 @@ async def test_wildfire_risk_sido_and_sigungu_use_v2_filters(fake_client_factory
     assert session.calls[1]["params"]["upplocalcd"] == "51"
     assert sigungu.items[0].region_code == "51820"
     assert sigungu.items[0].region_name == "속초시"
+
+
+async def test_standard_recreation_forests_accepts_the_unwrapped_standard_envelope(
+    fake_client_factory,
+):
+    """표준데이터 gateway가 `response` 래퍼 없이 주는 응답도 읽는다.
+
+    2026-09-19 prod 실측: `api.data.go.kr/openapi/tn_pubr_public_rcrfrst_api`가
+    `{"header": {...}, "body": {...}}`를 최상위로 돌려주는데 파서가
+    `ForestParseError: response contained neither response.header/body nor a
+    top-level resultCode`로 거부해 적재가 매번 실패했다. 2026-06-12에는 같은
+    엔드포인트가 래퍼를 줬으므로(그때 파서는 `payload["response"]`를 엄격히
+    요구했고 적재가 성공했다) **상류가 바뀐 것**이다.
+
+    이 카탈로그에서 그 gateway를 쓰는 것은 이 엔드포인트 하나뿐이다.
+    """
+
+    payload = standard_data_payload(
+        {
+            "rcrfrstNm": "기찬자연휴양림",
+            "ctprvnNm": "전라남도",
+            "rcrfrstType": "공유림",
+            "rdnmadr": "전라남도 영암군 미암면 곤미현로 1190-76",
+            "institutionNm": "전라남도 영암군청",
+        },
+        total_count=1,
+    )
+    assert "response" not in payload, payload.keys()
+
+    client, _session = fake_client_factory(FakeResponse(payload))
+    page = await client.travel.standard_recreation_forests()
+
+    assert page.total_count == 1
+    assert len(page.items) == 1
+
+
+async def test_a_payload_without_header_and_body_is_still_refused(
+    fake_client_factory,
+):
+    """관용화가 **거부 집합까지** 넓히지는 않았는지 센다.
+
+    `payload.get("response", payload)` 식으로 통짜 관용화하면 `header`/`body`가
+    없는 쓰레기 payload도 `resultCode=""`로 미끄러져 **빈 페이지가 성공으로
+    보인다** — 스냅샷 적재에서 그것은 조용한 전면 은퇴로 번진다. 새 가지는 두
+    키가 **둘 다 dict일 때만** 열려야 한다.
+    """
+
+    client, _session = fake_client_factory(FakeResponse({"something": "else"}))
+    with pytest.raises(ForestParseError):
+        await client.travel.standard_recreation_forests()
 
 
 async def test_standard_recreation_forests_uses_type_param_and_models(fake_client_factory):
