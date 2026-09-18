@@ -321,6 +321,26 @@ def _normalize_payload(
                 response=payload,
                 failure_kind="parse",
             ) from exc
+    elif isinstance(payload.get("header"), dict) and isinstance(
+        payload.get("body"), dict
+    ):
+        # data.go.kr **표준데이터** gateway(`api.data.go.kr/openapi/tn_pubr_*`)는
+        # `response` 래퍼 없이 `header`/`body`를 최상위에 둔다. 2026-09-19 실측:
+        # `tn_pubr_public_rcrfrst_api`가
+        # `{"header":{"resultCode":"00",...},"body":{"items":...,"totalCount":186}}`를
+        # 돌려준다. 2026-06-12에는 같은 엔드포인트가 래퍼를 줬으므로(그때 파서는
+        # `payload["response"]`를 엄격히 요구했고 적재가 성공했다) **상류가 바뀐
+        # 것**이다. 이 카탈로그에서 그 gateway를 쓰는 것은
+        # `standard_recreation_forests` 하나뿐이고 나머지 13건은
+        # `apis.data.go.kr/<부처코드>/...`로 아직 래퍼를 준다.
+        #
+        # **`payload.get("response", payload)` 식의 통짜 관용화는 쓰지 않는다.**
+        # 그러면 `header`/`body`가 아예 없는 쓰레기 payload도 `resultCode=""`로
+        # 미끄러져 **빈 페이지가 성공으로 보인다** — 스냅샷 적재에서 그것은 조용한
+        # 전면 은퇴로 번진다. 두 키가 **둘 다 dict일 때만** 여는 좁은 가지라
+        # 기존 거부 집합이 그대로 남는다.
+        header = payload["header"]
+        body = payload["body"]
     elif flat_body is not None:
         # 청정넷(AICAN) 계열 등 일부 provider는 response.header/body로 감싸지 않고
         # resultCode/resultMsg/items를 최상위에(JSON) 또는 임의의 XML root
